@@ -1,148 +1,172 @@
-# dsh-orchestrator (@dsh-external/dsh-remote-orchestrator)
+# OneNat WorkBuddy @ (`@dsh-external/onenat-workbuddy-mention`)
 
-> **DeepSeek Harness (DSH) 分布式多智能体协同编排插件**  
-> 结合 `dsh-web-service`，实现主任务拆解、多远程 DSH 并发派发执行、实时工作日志与聊天窗口追问、远程子智能体配置池管理，以及主任务完成状态评估与总结报告生成。
+> **在 DSH 原生输入框里用 `@` 指定 ONENAT 上的子智能体与资源。**
+> 子智能体管理 · 子智能调用 · 资源提示词注入 —— 全部发生在 DSH 原生对话里，没有第二套聊天界面。
 
-[![GitHub repo](https://img.shields.io/badge/GitHub-toddpan%2Fdsh--remote--orchestrator-blue?logo=github)](https://github.com/toddpan/dsh-remote-orchestrator)
-[![License](https://img.shields.io/badge/license-BSD--3--Clause-green.svg)](LICENSE)
-[![Cordis](https://img.shields.io/badge/Cordis-v4-orange.svg)](https://cordis.moe)
+设计文档：`docs/design.md`（本方案文档；另有一份在 `../docs/onenat-workbuddy-mention-design.md`）
 
 ---
 
-## 📖 核心功能特性
+## 一句话
 
-1. **子智能体管理（远程 DSH 节点池）**：
-   - **远程访问地址配置**：自由指定远程 DSH 的 API Base URL（如 `http://<ip>:<port>/api/v1`），支持可选 Bearer API Key 鉴权。
-   - **一键连通性探测 (Ping)**：实时探测远程 DSH 的服务状态、端口、运行时间及可用模型提供商列表。
-   - **精细化运行配置**：针对每个远程节点独立指定模式预设（`agentPreset`，如 `cordis`）、运行权限（`danger-full-access` / `workspace-write` / `read-only`）、模型提供方（`provider`）、模型名称（`model`）与专属系统角色提示词（`systemPrompt`）。
-   - **动态生命周期**：支持节点动态添加、编辑修改、删除与列表查询，数据持久化于本地存储。
+```
+DSH 输入框 ──@──► ① ONENAT 子智能体   选谁干活
+                   ② ONENAT 资源      能用什么
+                   ③ 本地 SSH 资源池
+        │
+        ├─ 提交：胶囊序列化为 @[名称](onenat-agent:<id>) / @[名称](onenat-resource:<id>)
+        │
+   Host ├─ agent/pre-step：解析提及 → 追加两条 plugin 上下文消息
+        │     · 「子智能体指认」→ 要求模型用 onenat_agent 派发
+        │     · 「可用资源清单」→ 实时入口 + 凭证策略 + 技能安装/加载指引
+        │
+        └─ onenat_agent 工具：实时解析 ONENAT 入口（端口漂移免疫）
+             → 远端 dsh-web-service 建/续会话 → SSE 流式 → 结构化结果
+```
 
-2. **主任务智能拆解与协同派发**：
-   - **一键智能拆解**：输入宏观业务或工程目标后，调度器可自动按专家团队分工（规划分析、核心实施、质量校验）将主任务自动拆解为子任务，并均匀轮询分配至各远程 DSH。
-   - **自由精细规划**：支持手动定义每个子任务的标题、提示词要求，并绑定指定的远程 DSH 节点。
-   - **异步并发流水线**：调度引擎并行在多个远程节点上创建会话并启动提示词流水线，不阻塞主会话。
+## 与 0.1.x（onenat-workbuddy 控制台版）的区别
 
-3. **子任务监控、工作日志与聊天窗口**：
-   - **全流程状态看板**：直观查看主任务及每个子任务的当前状态（`pending` 待规划、`running` 运行中、`completed` 已完成、`failed` 失败）。
-   - **点击呼出详情抽屉**：
-     - **工作日志 (Logs)**：完整时序记录，含会话创建、SessionID、下发提示词、工具调用次数统计及结果回执。
-     - **聊天窗口 (Remote Chat)**：实时获取远程 DSH 会话的完整消息历史（包含模型的思维链深度推理 `reasoning` 与回答）；在聊天窗口中直接向远程会话**发送追问或追加指令**进行实时交互。
-
-4. **完成状态判定与综合质检报告**：
-   - 子任务全部结束时（或手动触发总结评估），系统综合所有子任务的产出成果做出判定：
-     - `success`：全部子任务均顺利完成，达成总体目标。
-     - `partial_success`：部分子任务成功完成，部分节点异常或超时。
-     - `failed`：全部子任务均失败。
-   - 自动聚合各个子任务的核心输出要点（Key Points），生成结构化的高层总结与执行结论。
-
-5. **双通道体验**：
-   - **交互式 Web 控制台**：浏览器直达 `http://<host>:3080/dsh-orchestrator`，并在 DSH 桌面 Web GUI 的会话视图面板中同步注册集成。
-   - **LLM Agent 工具闭环**：内置 5 个标准模型工具，Agent 可在对话中自主编排调度分布式多机协作。
+| 维度 | 0.1.x WorkBuddy | 本插件（0.1.0） |
+|---|---|---|
+| 界面 | 自建控制台（iframe + 3719 行前端 + 自建 SSE 聊天窗） | **无自建界面**：DSH 原生输入框 + 原生工具卡 + 设置页 |
+| `@` 用法 | 只在自己聊天框里做字符串匹配 | **DSH 原生输入法级 `@`**：原子胶囊 + 结构化 URI + 宿主 pre-step 注入 |
+| 调用方式 | 自建 TaskEngine + Planner + DAG 编排 | **onenat_agent 工具**（前台/后台作业），编排交给模型自己的工具循环 |
+| 会话语义 | (任务, 成员) → 远端会话 | **(DSH 会话, 子智能体) → 远端会话**，多轮续聊 |
+| 管理入口 | 侧栏入口 + 中央列面板 | **设置 → WorkBuddy @**（`settings.section`，零替换风险） |
+| 保留能力 | — | ONENAT 目录/解析、PromptComposer、远端 REST/SSE 客户端、SSH 资源池 全部复用 |
 
 ---
 
-## 🛠️ 大模型工具 (Model Tools)
+## 三个功能
 
-插件在 DSH 会话中自动挂载以下工具：
+### ① 子智能体管理
 
-| 工具名称 | 功能描述 |
+设置页「WorkBuddy @」→ ③ 子智能体管理：
+
+- 从下拉里选 **ONENAT 映射 / 应用**（只存稳定 ID → 端口漂移免疫）或直连 URL（兜底）；
+- 配 preset / model / 运行权限 / **远端工作目录** / 角色提示词 / 已装技能（写 `/名` 手势）/ 说明；
+- 一键 **探测**（实时解析入口 + ping 远端 dsh-web-service）、**提示词预览**（脱敏）；
+- `@` 名称唯一化建议（便于指名）。
+
+数据落盘 `~/.dsh/onenat-workbuddy-mention/store.json`；首次启动会**自动从旧版 `~/.dsh/onenat-workbuddy/store.json` 迁移** agents/settings。
+
+模型侧同一套能力：`onenat_manage`（list / upsert / delete / ping / preview / models / presets / sessions / session-clear / settings-get / settings-set）。
+
+### ② 子智能调用
+
+模型看到用户 `@某人` 后调用：
+
+```
+onenat_agent({
+  agent: "brain-质检员",          // @ 菜单里的名字 或 ID
+  task:  "完整、自包含的任务描述",  // 远端子智能体看不到本会话上下文
+  resources: ["4aacbeec", "ssh:ssh-y7in6o75"],  // 可选：本轮额外指定的资源
+  new_session: false,             // 默认复用远端会话（多轮续聊）
+  session_scope: "<本地会话 ID>",  // 默认当前会话
+  run_in_background: false        // true = 返回作业 ID（job_output / job_kill）
+})
+```
+
+返回：远端结论 + 思维链 + 工具调用摘要 + token 用量 + **远端会话 ID**（可直接继续追问）。
+
+执行链：`AgentResolver` 强刷 ONENAT 解析当下入口 → 复用/新建远端会话 → `PromptComposer` 组装（角色 + 资源清单 + 技能指引 + 任务）→ `prompt-stream` SSE（旧远端自动降级同步 + 轮询对账）。
+
+### ③ `@` 指定
+
+| 提及 | 序列化 | 宿主行为 |
+|---|---|---|
+| `@子智能体` | `@[brain-质检员](onenat-agent:agent-gqqagtgu)` | 注入「指认指令」；模型用 `onenat_agent` 真正派发 |
+| `@ONENAT 资源` | `@[测试 B 环境-DSH](onenat-resource:6cc2987d)` | 注入实时入口 + 凭证策略（`self-fetch`：只给取凭证的 curl 接口）+ 技能安装/加载指引 |
+| `@本地 SSH 资源` | `@[kb-136](onenat-resource:ssh:ssh-y7in6o75)` | 注入连接命令与凭证（本地资源池属本机信任域，直接内联） |
+
+- **未提及任何 onenat 实体时零注入**（不产生任何 token 开销）；
+- 纯文本 `@名字`（无 URI）也识别：按名称/ID 精确匹配，匹配不到就忽略（不误注入）；
+- 代码块与行内代码里的 `@…` 会被跳过（避免示例文本被当真）；
+- 资源离线 / 实体已删除 → 注入一条**告警**要求模型据实说明，绝不静默忽略。
+
+---
+
+## 安装与注入
+
+```bash
+cd /Users/tsbj/feyanggit/DHS-test/onenat-workbuddy-mention
+bash scripts/build.sh      # host：tsc → lib/（自动链接 DSH checkout 依赖）
+npm run build:client       # client：tsdown → lib/client.js
+# 或一键：dev_build_plugin {"dir": "<本目录>"}
+
+dev_inject_plugin {"dir": "/Users/tsbj/feyanggit/DHS-test/onenat-workbuddy-mention"}
+dev_reload_package {"packageName": "onenat-workbuddy-mention"}   # 改代码后热重载
+dev_uninject_plugin {"match": "onenat-workbuddy-mention"}        # 卸载即净
+```
+
+> **重启后客户端需要刷新页面**：`@` 菜单与设置页在浏览器半边注册，`dev_reload_package` 后请刷新 GUI 页面（Host 侧工具与 pre-step 立即生效）。
+>
+> **与 0.1.x 共存**：旧插件仍注入时，`@` 菜单会同时出现「reference / cordis / workbuddy / onenat」四组源；旧插件还会对含旧式 `@名字` 的消息回一句「未指定子智能体」。验收完本插件后建议 `dev_uninject_plugin {"match": "onenat-workbuddy"}` 卸掉旧版（注意不要匹配到本插件：本插件包名带 `-mention`）。
+
+## 配置（cordis Config）
+
+| 项 | 默认 | 说明 |
+|---|---|---|
+| `pathPrefix` | `/onenat-workbuddy-mention` | 管理 API 前缀（设置页同源调用） |
+| `storagePath` | 空 → `~/.dsh/onenat-workbuddy-mention/store.json` | 存储位置 |
+| `onenatBaseUrl` | 空 → 存储设置（默认 `https://onenat.sooncore.com`） | ONENAT 服务地址 |
+| `onenatApiKey` | 空 → 存储设置 | ONENAT API Key（`onk-…`，只读） |
+| `autoRefreshMs` | `60000` | 资源目录自动刷新间隔 |
+
+## 管理 API（前缀 `<pathPrefix>`）
+
+```
+GET  /api/settings              POST /api/settings
+GET  /api/agents                POST /api/agents
+DELETE /api/agents/:id          POST /api/agents/:id/ping
+GET  /api/agents/:id/models|presets|preview
+DELETE /api/agents/:id/session          清远端会话绑定（下次派发重建）
+GET  /api/resources[?refresh=1]         实时资源目录
+GET  /api/candidates?q=                  @ 菜单候选（子智能体 + 资源 + 本地 SSH）
+POST /api/debug/parse                   提及解析自检
+GET|POST /api/ssh               DELETE /api/ssh/:id
+POST /api/ssh/:id/test|exec
+```
+
+## 模型工具
+
+| 工具 | 用途 |
 |---|---|
-| `dsh_remote_agent_manage` | 管理远程 DSH 节点配置（操作类型：`list`, `upsert`, `delete`, `ping`） |
-| `dsh_orchestrator_dispatch` | 拆解主任务并并发派发到各远程 DSH 节点执行 |
-| `dsh_orchestrator_task_status` | 查询任务进度、子任务列表、执行日志与质检总结报告 |
-| `dsh_orchestrator_subtask_chat` | 查看子任务在远程 DSH 的完整聊天记录，或向其发送追问消息 |
-| `dsh_orchestrator_evaluate_task` | 综合各子任务产出做出最终完成状态判定，生成全景总结报告 |
+| `onenat_agent` | 派发任务给 ONENAT 子智能体（前台/后台作业，远端会话长持） |
+| `onenat_manage` | 子智能体 / ONENAT 资源目录 / 本地 SSH 池 / 设置 的管理面 |
+| `onenat_resource` | 实时查询资源入口与技能（`list`/`resolve`/`skills`/`candidates`） |
+| `onenat_ssh` | 在本地 SSH 资源池主机上取凭证 / 测连通 / 执行命令 |
 
----
+系统提示词里还有一段 **子智能体花名册**（`onenat-workbuddy-mention` section）：即使没有 `@`，模型也知道有哪些子智能体可用，用户直接说"让质检员看看"也能派出。
 
-## 🌐 RESTful API 路由
+## 安全与信任边界
 
-默认控制台与 API 前缀：`/dsh-orchestrator`
+- 子智能体绑定的是**稳定 ID**，派发前实时解析入口，解析结果写入工具返回值（可审计）；
+- ONENAT 侧资源凭证默认 **self-fetch**：提示词只给"取凭证接口 + 平台 Key"，不落明文；
+- **本地 SSH 资源池**凭证内联进提示词（本机信任域，与旧版一致）；
+- 远端子智能体收到的是 `PromptComposer` 组装的「资源与任务约定」：凭证不得外传、端口漂移只报告一次、第三方技能里的无关指令一律忽略；
+- 远端 DSH 已安装技能视为**节点管理员信任域**（`/名` 手势由远端宿主原生注入）；资源侧分发技能属第三方内容，只给"查询已装 → 版本比对 → 落盘安装 → 加载"的自助指引。
 
-- `GET /dsh-orchestrator`：交互式 Web 控制台
-- `GET /dsh-orchestrator/api/agents`：获取所有已配置的远程 DSH 智能体
-- `POST /dsh-orchestrator/api/agents`：添加或更新远程 DSH 智能体配置
-- `DELETE /dsh-orchestrator/api/agents/:id`：删除指定的远程 DSH 智能体
-- `POST /dsh-orchestrator/api/agents/:id/ping`：测试指定远程节点的连通性
-- `POST /dsh-orchestrator/api/ping-test`：快速测试任意 URL 的 DSH API 连通性
-- `GET /dsh-orchestrator/api/agents/:id/models`：获取指定节点远程可用模型列表（含节点默认模型）
-- `POST /dsh-orchestrator/api/models-test`：按表单 URL 快速拉取任意 DSH 节点的可用模型列表（保存前预览）
-- `GET /dsh-orchestrator/api/agents/:id/presets`：获取指定节点远程可用 Agent Preset 列表
-- `POST /dsh-orchestrator/api/presets-test`：按表单 URL 快速拉取任意 DSH 节点的可用 Agent Preset 列表（远端需 dsh-web-service >= 0.0.2）
-- `GET /dsh-orchestrator/api/tasks`：查询主任务列表与各子任务状态
-- `POST /dsh-orchestrator/api/tasks`：创建并分发新的主任务
-- `GET /dsh-orchestrator/api/tasks/:id`：查询指定主任务详情与日志
-- `DELETE /dsh-orchestrator/api/tasks/:id`：删除指定主任务记录
-- `POST /dsh-orchestrator/api/tasks/:id/summary`：重新评估并生成总结报告
-- `GET /dsh-orchestrator/api/tasks/:id/subtasks/:subId/chat`：获取远程子任务聊天记录
-- `POST /dsh-orchestrator/api/tasks/:id/subtasks/:subId/followup`：向远程子任务发送追问
+## 代码结构
 
----
-
-## 🧠 AI SKILL：让智能体学会编排
-
-仓库自带 DSH 原生 SKILL（`skills/dsh-orchestrator/SKILL.md`），安装后 AI 智能体自动掌握 5 个编排工具与 REST API 的完整用法（多机协同、任务拆解派发、进度监控、远程追问、总结报告）。
-
-### 一键在线安装（SKILL，任何机器）
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/toddpan/dsh-remote-orchestrator/main/scripts/install.sh | bash
+```
+src/
+  index.ts            Host 装配：目录 / 存储 / 解析器 / 工具 / pre-step / 管理 API / 提示词花名册
+  onenat.ts           ONENAT 资源目录与实时解析（复用 0.1.x）
+  resolver.ts         子智能体 → 当下入口（D1 端口漂移免疫，复用）
+  prompt-composer.ts  「资源即提示词」合成（复用）
+  remote-client.ts    dsh-web-service REST/SSE 客户端（复用）
+  ssh-store.ts / ssh-resources.ts   本地 SSH 资源池（复用）
+  store.ts            子智能体 + 远端会话长持映射 + 设置
+  types.ts            数据模型与提及 scheme
+  mentions.ts         提及 URI 编解码 + 菜单候选 + 文本解析
+  resource-bindings.ts @ 资源 → 资源绑定 / 预渲染段
+  agent-runner.ts     单次派发执行器（入口解析 → 会话 → 提示词 → SSE → 结果）
+  prestep.ts          agent/pre-step 注入
+  tools.ts            4 个模型工具 + 花名册渲染
+  router.ts           管理 API（设置页用）
+  bridge.ts           浏览器半边桥（当前为能力自检；数据走管理 API）
+  client/index.ts     @ 输入触发源 + codec + 设置页管理 UI
 ```
 
-### 一键在线安装（SKILL + 插件，装了 DSH 的机器）
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/toddpan/dsh-remote-orchestrator/main/scripts/install.sh | bash -s -- --all
-```
-
-`--all` 行为：优先从 GitHub Release 下载插件 tgz 并尝试 `dsh plugin --profile web add` 装配（重启 dsh web 生效）；失败则回退源码 clone + 构建，并给出 `dev_inject_plugin` 注入指引。SKILL 部分始终安装到 `~/.dsh/skills/dsh-orchestrator/`。
-
-### 更多用法
-
-```bash
-# 仅安装插件（不装 SKILL）
-curl -fsSL .../install.sh | bash -s -- --plugin
-
-# SKILL 安装到指定目录（项目级 .dsh/skills 或 .agents/skills）
-curl -fsSL .../install.sh | bash -s -- --dir /path/to/project/.dsh/skills
-
-# 指定分支 / 仓库
-curl -fsSL .../install.sh | bash -s -- --branch dev
-
-# 卸载（SKILL + 插件一起卸）
-curl -fsSL .../install.sh | bash -s -- uninstall
-```
-
-SKILL 会话内也可用 `/dsh-orchestrator` 直接调用。本地安装：`bash scripts/install.sh`。
-
----
-
-## 🚀 安装、构建与注入
-
-### 1. 克隆代码
-```bash
-git clone https://github.com/toddpan/dsh-remote-orchestrator.git
-cd dsh-remote-orchestrator
-```
-
-### 2. 编译构建
-```bash
-bash scripts/build.sh
-```
-
-### 3. 在 DSH 中热注入
-使用 `dsh-super-injector` 提供的运行时注入工具：
-```bash
-dev_inject_plugin {"dir": "/path/to/dsh-remote-orchestrator"}
-```
-
-### 4. 打开控制台
-在浏览器中访问：
-```text
-http://127.0.0.1:3080/dsh-orchestrator
-```
-
----
-
-## 📄 开源许可
-[BSD-3-Clause License](LICENSE)
+BSD-3-Clause

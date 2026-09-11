@@ -1,13 +1,15 @@
-import { fileURLToPath } from 'node:url'
 import type { UserConfig } from 'tsdown'
 
-const PLUGIN_ID = "@dsh-external/dsh-remote-orchestrator"
+const PLUGIN_ID = "@dsh-external/onenat-workbuddy-mention"
 
+// 平台种子词（apps/web seed.ts 的静态模块表）：只有这些能作为外部依赖由 require 提供。
+// 注意：动态 Cordis Package 专有的 `styles` / `host` / `harness` **不是** bundle 插件可用的全局。
 const CLIENT_EXTERNALS = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client',
-  'cordis',
+  '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-runtime/client',
+  '@deepseek-ai/dsh-client-ui-primitives',
 ]
 
 const clientBundle: UserConfig = {

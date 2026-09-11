@@ -1,20 +1,20 @@
 {
-  "name": "@dsh-external/dsh-remote-orchestrator",
-  "version": "0.0.7",
-  "description": "DeepSeek Harness (DSH) 远程多智能体主子任务拆解派发与协同编排插件",
+  "name": "@dsh-external/onenat-workbuddy-mention",
+  "version": "0.1.0",
+  "description": "OneNat WorkBuddy @ —— 在 DSH 原生输入框用 @ 指定 ONENAT 子智能体与资源（子智能体管理 / 子智能调用 / 资源提示词注入）",
   "private": true,
   "repository": {
     "type": "git",
     "url": "https://github.com/toddpan/dsh-remote-orchestrator.git"
   },
-  "homepage": "https://github.com/toddpan/dsh-remote-orchestrator",
   "keywords": [
     "deepseek-harness",
     "dsh",
     "cordis",
-    "orchestrator",
-    "multi-agent",
-    "distributed-ai"
+    "onenat",
+    "workbuddy",
+    "mention",
+    "subagent"
   ],
   "author": "toddpan",
   "type": "module",
@@ -25,6 +25,7 @@
   ],
   "license": "BSD-3-Clause",
   "peerDependencies": {
+    "@deepseek-ai/dsh-agent": ">=0.0.1-rc <2",
     "@deepseek-ai/dsh-llm": ">=0.0.1-rc <2",
     "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
     "@deepseek-ai/dsh-host-webserver": ">=0.0.1-rc <2",
@@ -63,6 +64,7 @@
     }
   },
   "dependencies": {
-    "ssh2": "^1.17.0"
+    "ssh2": "^1.17.0",
+    "undici": "^7.0.0"
   }
 }

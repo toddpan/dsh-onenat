@@ -41,6 +41,17 @@ link_pkg() {
   " "node_modules/$1" "$target"
 }
 
+
+# .bin 链接（tsdown / rolldown 客户端打包用）
+if [ -d "$CHECKOUT/node_modules/.bin" ]; then
+  mkdir -p node_modules/.bin
+  for bin in tsdown rolldown; do
+    if [ -x "$CHECKOUT/node_modules/.bin/$bin" ] || [ -f "$CHECKOUT/node_modules/.bin/$bin" ]; then
+      ln -sf "$CHECKOUT/node_modules/.bin/$bin" "node_modules/.bin/$bin"
+    fi
+  done
+fi
+
 echo "=== Linking build dependencies (checkout: $CHECKOUT) ==="
 mkdir -p node_modules/@deepseek-ai
 node -e "const fs=require('fs');fs.rmSync('node_modules/@standard-schema',{recursive:true,force:true})"
@@ -51,6 +62,7 @@ link_pkg @deepseek-ai/dsh-tools packages/core/tools
 link_pkg @deepseek-ai/dsh-llm packages/llm/llm
 link_pkg @deepseek-ai/dsh-system-prompt packages/core/system-prompt
 link_pkg @deepseek-ai/dsh-host-webserver packages/host/webserver
+link_pkg @deepseek-ai/dsh-agent packages/core/agent
 link_pkg @deepseek-ai/dsh-client-ui-slots packages/client/ui-slots
 # @types/node（编译类型；checkout 自带）
 link_pkg @types/node node_modules/@types/node
@@ -72,6 +84,26 @@ if [ ! -e node_modules/ssh2 ]; then
     echo "=== ssh2 linked from $SSH2_SRC ==="
   else
     echo "=== ssh2 not found (test/exec 将降级为 TCP 探测) ==="
+  fi
+fi
+
+# undici（SSE 长静默 dispatcher：bodyTimeout=0 防长工具执行期间流被 300s chunk 间超时掐断）
+# 已声明在 package.json dependencies；本地无网时从 checkout pnpm store 链接，都没有则跳过（运行时优雅降级默认 fetch）
+if [ ! -e node_modules/undici ]; then
+  UNDICI_SRC=""
+  for candidate in "$CHECKOUT"/node_modules/.pnpm/undici@7*/node_modules/undici "$CHECKOUT/node_modules/undici"; do
+    if [ -d "$candidate" ]; then UNDICI_SRC="$candidate"; break; fi
+  done
+  if [ -n "$UNDICI_SRC" ]; then
+    node -e "
+      const fs = require('fs');
+      const path = require('path');
+      fs.mkdirSync('node_modules', { recursive: true });
+      fs.symlinkSync(path.resolve(process.argv[1]), path.resolve('node_modules/undici'), process.platform === 'win32' ? 'junction' : 'dir');
+    " "$UNDICI_SRC"
+    echo "=== undici linked from $UNDICI_SRC ==="
+  else
+    echo "=== undici not found (SSE 长静默段将使用 undici 默认 300s chunk 超时) ==="
   fi
 fi
 

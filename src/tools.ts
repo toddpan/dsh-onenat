@@ -1,484 +1,543 @@
 /**
- * @dsh-external/dsh-remote-orchestrator - Model Tools for DSH Agents
+ * @dsh-external/onenat-workbuddy-mention - 模型工具
+ *
+ *  onenat_agent   —— 把任务派发给 ONENAT 上的子智能体（远端 DSH 会话，长持复用）
+ *  onenat_manage  —— 子智能体 / ONENAT 资源 / 本地 SSH 资源池的管理面
+ *
+ * 资源「自身」的使用不需要专用工具：@资源 注入的清单已给出入口与凭证，
+ * 模型用自带的 bash / web_fetch 即可 —— 不再新增一层转手工具。
  */
 
 import type { Context } from 'cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { OrchestratorStore } from './store.js'
+import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+
+import { DshClient } from './remote-client.js'
+import type { AgentRunner, AgentRunResult } from './agent-runner.js'
+import type { MentionParser } from './mentions.js'
+import type { OnenatDirectory } from './onenat.js'
+import type { AgentResolver } from './resolver.js'
 import type { SshResourceStore } from './ssh-store.js'
-import type { TaskOrchestrator } from './orchestrator.js'
-import { RemoteDshClient } from './remote-client.js'
-import { SshInputError, execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
-import type { SshResource } from './types.js'
+import type { WorkStore } from './store.js'
+import {
+  SshInputError,
+  execOnSshResource,
+  maskSshResource,
+  newSshResourceId,
+  normalizeSshResource,
+  testSshResource,
+} from './ssh-resources.js'
+import type { SubAgent } from './types.js'
 
-export function registerOrchestratorTools(
-  ctx: Context,
-  store: OrchestratorStore,
-  orchestrator: TaskOrchestrator,
-  sshStore: SshResourceStore,
-  config: { pathPrefix?: string; port?: number }
-): void {
-  const client = new RemoteDshClient()
-  const webServer = ctx.get('webServer') as any
-  const port = config.port || webServer?.port || 3080
-  const prefix = config.pathPrefix || '/dsh-orchestrator'
-  const consoleUrl = `http://127.0.0.1:${port}${prefix}`
+/** jobs 服务的最小结构面（避免编译期依赖 @deepseek-ai/dsh-jobs 的导出名） */
+interface JobHooksLike {
+  cancel(reason?: string): void
+  done: Promise<{ status: 'completed' | 'killed' | 'failed'; detail?: string; output?: string }>
+  readOutput?(): string
+}
+interface JobsLike {
+  start(spec: { kind: 'subagent'; label: string; owner?: Agent; run(): JobHooksLike }): string
+}
 
-  // 1. 远程 DSH 子智能体管理工具
+export interface ToolDeps {
+  store: WorkStore
+  directory: OnenatDirectory
+  resolver: AgentResolver
+  runner: AgentRunner
+  sshStore: SshResourceStore
+  parser: MentionParser
+  log: (msg: string) => void
+}
+
+const TEXT_OUTPUT = {
+  schema: { type: 'string' } as const,
+  render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: String(value) }],
+}
+
+function json(value: unknown): string {
+  return JSON.stringify(value, null, 2)
+}
+
+function errText(err: any): string {
+  return String(err?.message || err)
+}
+
+export function registerTools(ctx: Context, deps: ToolDeps): void {
+  registerAgentTool(ctx, deps)
+  registerManageTool(ctx, deps)
+  registerResourceTool(ctx, deps)
+  registerSshExecTool(ctx, deps)
+}
+
+// ---------------------------------------------------------------- onenat_agent
+
+function registerAgentTool(ctx: Context, deps: ToolDeps): void {
   ctx.effect(
     () =>
       ctx.tools.register(
         defineTool({
-          name: 'dsh_remote_agent_manage',
+          name: 'onenat_agent',
           description:
-            '管理远程 DSH 子智能体配置：查询列表、添加新节点、更新配置、删除节点或测试连通性',
+            '把任务派发给 OneNat 上的子智能体（远端 DSH 节点上的独立智能体会话，有自己的文件/命令/网络工具与工作目录）。'
+            + '用 onenat_manage {action:"list"} 查看可用的子智能体；用户在消息里用 @ 指定了子智能体时按其指认调用。'
+            + '同一子智能体在本会话中默认复用远端会话（多轮续聊）；task 必须自包含（远端子智能体看不到本会话上下文）。'
+            + '默认前台等待结果；run_in_background=true 时立即返回后台作业 ID（用 job_output 读取进度与最终结果，job_kill 终止）。',
           parameters: {
-            action: {
+            agent: { type: 'string', description: '子智能体名称或 ID（@ 菜单里的名字，或 onenat_manage list 返回的 id）' },
+            task: {
               type: 'string',
-              description: '操作类型: list(列出), upsert(添加或更新), delete(删除), ping(测试连通性)',
+              description: '完整、自包含的任务描述：目标、约束、期望产出、必要的背景信息全部写进来（远端看不到本会话上下文）',
             },
-            agent: {
-              type: 'json',
-              description:
-                '子智能体配置对象（适用于 upsert 操作）：{ id, name, apiBaseUrl, agentPreset, provider, model, permission, systemPrompt, apiKey }',
+            resources: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '本轮额外指定给子智能体的资源（ONENAT mappingId/appId，或本地 SSH 资源的 ssh:<id>；@ 菜单里选中过的资源可在此传入）',
             },
-            agentId: {
+            new_session: { type: 'boolean', description: 'true = 为该子智能体开一个全新的远端会话（丢弃之前的上下文）' },
+            session_scope: {
               type: 'string',
-              description: '目标智能体 ID（适用于 delete 或 ping 操作）',
+              description: '远端会话的归属作用域（默认当前会话 ID）；同一作用域 + 同一子智能体复用同一远端会话',
             },
+            timeout_ms: { type: 'number', description: '单次派发超时毫秒（默认取插件设置）' },
+            run_in_background: { type: 'boolean', description: 'true = 后台执行，立即返回作业 ID（长任务推荐）' },
           },
-          output: {
-            schema: { type: 'string' },
-            render: (_args: unknown, value: unknown) => [{ type: 'text', text: String(value) }],
-          },
-          async execute(args: any) {
-            const action = args.action || 'list'
+          output: TEXT_OUTPUT,
+          async execute(args: any, exec: ToolRunContext): Promise<string> {
+            const agentKey = String(args?.agent || '').trim()
+            const task = String(args?.task || '')
+            if (!agentKey) return json({ ok: false, error: '缺少 agent（子智能体名称或 ID）' })
+            if (!task.trim()) return json({ ok: false, error: '缺少 task（任务描述）' })
 
-            if (action === 'list') {
-              const list = store.getAgents()
-              return JSON.stringify(
-                {
-                  ok: true,
-                  count: list.length,
-                  agents: list,
-                  consoleUrl,
-                },
-                null,
-                2
-              )
+            const resourceIds = Array.isArray(args?.resources) ? args.resources.map((x: unknown) => String(x)) : []
+            const scope = args?.session_scope ? String(args.session_scope) : (exec.agent ? String(exec.agent.id) : undefined)
+            const timeoutMs = Number(args?.timeout_ms) > 0 ? Number(args.timeout_ms) : undefined
+
+            if (args?.run_in_background === true) {
+              return startBackground(ctx, deps, {
+                agentKey,
+                task,
+                resourceIds,
+                scope,
+                timeoutMs,
+                newSession: args?.new_session === true,
+                owner: exec.agent,
+              })
             }
 
-            if (action === 'upsert') {
-              // 兼容 harness 传参差异：agent 可能是对象，也可能是 JSON 字符串
-              const agent: any = typeof args.agent === 'string' ? JSON.parse(args.agent) : args.agent
-              if (!agent || !agent.id || !agent.name || !agent.apiBaseUrl) {
-                return JSON.stringify({ ok: false, error: '缺少必填字段 id, name, apiBaseUrl' })
+            const result = await deps.runner.run(agentKey, task, {
+              resourceIds,
+              scope,
+              newSession: args?.new_session === true,
+              timeoutMs,
+              signal: exec.signal,
+            })
+            deps.log(`onenat_agent ${agentKey} → ${result.ok ? 'ok' : 'fail'}（${result.ms}ms, session ${result.remoteSessionId || '-'}）`)
+            return json(result)
+          },
+        }),
+      ),
+    'onenat-workbuddy-mention: onenat_agent tool',
+  )
+}
+
+interface BackgroundSpec {
+  agentKey: string
+  task: string
+  resourceIds: string[]
+  scope?: string
+  timeoutMs?: number
+  newSession: boolean
+  owner?: Agent
+}
+
+/** 后台派发：注册 jobs 作业，进度经 job_output 增量读取 */
+function startBackground(ctx: Context, deps: ToolDeps, spec: BackgroundSpec): string {
+  const jobs = ctx.get('jobs') as JobsLike | undefined
+  if (jobs === undefined) {
+    return json({ ok: false, error: '后台作业不可用（未加载 @deepseek-ai/dsh-jobs）；请改用前台调用（省略 run_in_background）' })
+  }
+
+  const controller = new AbortController()
+  const progress: string[] = []
+  let cursor = 0
+  let settled: AgentRunResult | undefined
+
+  const jobId = jobs.start({
+    kind: 'subagent',
+    label: `onenat:${spec.agentKey}`,
+    ...(spec.owner ? { owner: spec.owner } : {}),
+    run: (): JobHooksLike => {
+      const done = deps.runner
+        .run(spec.agentKey, spec.task, {
+          resourceIds: spec.resourceIds,
+          scope: spec.scope,
+          newSession: spec.newSession,
+          timeoutMs: spec.timeoutMs,
+          signal: controller.signal,
+          onProgress: (event) => {
+            if (event.type === 'delta' || event.type === 'reasoning') {
+              // 流式增量按段落聚合，避免进度流被逐字刷屏
+              const marker = event.type === 'delta' ? '▲ ' : '💭 '
+              const last = progress[progress.length - 1]
+              if (last !== undefined && last.startsWith(marker)) {
+                progress[progress.length - 1] = (last + event.text).slice(0, 8000)
+              } else {
+                progress.push(marker + event.text)
               }
-              const saved = store.upsertAgent(agent)
-              return JSON.stringify({ ok: true, message: '远程智能体配置已保存', agent: saved }, null, 2)
+              return
             }
-
-            if (action === 'delete') {
-              if (!args.agentId) return JSON.stringify({ ok: false, error: '缺少 agentId' })
-              const deleted = store.deleteAgent(args.agentId)
-              return JSON.stringify({ ok: true, deleted, agentId: args.agentId })
-            }
-
-            if (action === 'ping') {
-              if (!args.agentId) return JSON.stringify({ ok: false, error: '缺少 agentId' })
-              const a = store.getAgent(args.agentId)
-              if (!a) return JSON.stringify({ ok: false, error: '未找到指定智能体' })
-              const pingRes = await client.ping(a)
-              return JSON.stringify({ ok: true, agent: a.name, ping: pingRes }, null, 2)
-            }
-
-            return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
+            progress.push((event.type === 'tool' ? '🔧 ' : '· ') + event.text)
           },
         })
-      ),
-    '@dsh-external/dsh-remote-orchestrator: agent_manage tool'
-  )
+        .then((result) => {
+          settled = result
+          if (!result.ok) return { status: 'failed' as const, detail: result.error || '派发失败', output: renderBackgroundResult(result) }
+          return { status: 'completed' as const, output: renderBackgroundResult(result) }
+        })
+        .catch((err) => ({
+          status: 'failed' as const,
+          detail: errText(err),
+          output: `onenat_agent(${spec.agentKey}) 执行异常：${errText(err)}`,
+        }))
+      return {
+        cancel: () => controller.abort(),
+        done,
+        readOutput: () => {
+          if (settled !== undefined) return ''
+          const slice = progress.slice(cursor).join('\n')
+          cursor = progress.length
+          return slice
+        },
+      }
+    },
+  })
 
-  // 2. 主任务拆解与协同派发工具
+  return json({
+    ok: true,
+    background: true,
+    jobId,
+    agent: spec.agentKey,
+    hint: '已后台派发。用 job_output 读取进度与最终结果；job_kill 终止。远端会话 ID 会在最终结果里给出（可继续追问）。',
+  })
+}
+
+function renderBackgroundResult(result: AgentRunResult): string {
+  const lines: string[] = []
+  lines.push(`[onenat_agent] 子智能体：${result.agentName}（${result.agentId}）`)
+  lines.push(`状态：${result.ok ? '成功' : '失败'} · 耗时 ${result.ms}ms · 入口 ${result.entry || '-'} · 远端会话 ${result.remoteSessionId || '-'}${result.sessionReused ? '（复用）' : '（新建）'}`)
+  if (result.error) lines.push(`错误：${result.error}`)
+  if (result.tools.length > 0) {
+    lines.push(`工具调用（${result.tools.length}）：${result.tools.map((t) => `${t.name}${t.status === 'done' ? '' : `[${t.status}]`}`).join(', ')}`)
+  }
+  if (result.output) {
+    lines.push('')
+    lines.push('--- 远端结论 ---')
+    lines.push(result.output)
+  }
+  return lines.join('\n')
+}
+
+// --------------------------------------------------------------- onenat_manage
+
+function registerManageTool(ctx: Context, deps: ToolDeps): void {
   ctx.effect(
     () =>
       ctx.tools.register(
         defineTool({
-          name: 'dsh_orchestrator_dispatch',
+          name: 'onenat_manage',
           description:
-            '将一个主任务拆解成若干子任务并分发给多个远程 DSH 执行。如果未手动传入 subtasks，系统将自动拆解规划并派发。',
+            'OneNat WorkBuddy 管理面：子智能体（list/upsert/delete/ping/preview/models/presets/sessions/session-clear）、'
+            + 'ONENAT 资源目录（resources/resolve/refresh）、本地 SSH 资源池（ssh-list/ssh-get/ssh-upsert/ssh-delete/ssh-test/ssh-exec/skill）、'
+            + '设置（settings-get/settings-set）。'
+            + '用户在输入框用 @ 选中实体时由宿主自动注入上下文，本工具用于增删改查与连通性检查。',
           parameters: {
-            title: {
-              type: 'string',
-              description: '主任务简明标题',
-            },
-            objective: {
-              type: 'string',
-              description: '主任务详细总目标与产出要求',
-            },
-            subtasks: {
-              type: 'json',
-              description:
-                '可选的子任务规划列表：[{ title, prompt, remoteAgentId }]。若省略则自动拆解分发。',
-            },
+            action: { type: 'string', description: '操作名（见工具描述）' },
+            agent: { type: 'json', description: '子智能体定义（upsert 用）: { id?, name, dshRef, apiKey?, agentPreset?, permission?, provider?, model?, workDir?, systemPrompt?, resources?, skills?, description?, enabled? }' },
+            agentId: { type: 'string', description: '子智能体 ID（delete/ping/preview/models/presets/session-clear 用；也接受名称）' },
+            resource: { type: 'json', description: 'SSH 资源定义（ssh-upsert 用）: { id?, name, host, port?, authType:"password"|"key", username, password?, privateKey?, passphrase?, description?, tags? }' },
+            resourceId: { type: 'string', description: 'SSH 资源 ID 或名称（ssh-get/ssh-delete/ssh-test/ssh-exec 用）' },
+            mappingId: { type: 'string', description: 'ONENAT 映射 ID（resolve 用）' },
+            command: { type: 'string', description: 'ssh-exec 要执行的远程命令' },
+            settings: { type: 'json', description: '设置补丁（settings-set 用）: { onenat?: { baseUrl?, apiKey?, autoRefreshMs? }, defaults?: { reuseSession?, timeoutMs? } }' },
+            timeoutMs: { type: 'number', description: 'SSH test/exec 超时毫秒（默认 test 8000 / exec 30000）' },
+            newSession: { type: 'boolean', description: 'preview: 是否预览"全新会话"提示词（默认 false）' },
           },
-          output: {
-            schema: { type: 'string' },
-            render: (_args: unknown, value: unknown) => [{ type: 'text', text: String(value) }],
-          },
-          async execute(args: any) {
-            if (!args.objective) {
-              return JSON.stringify({ ok: false, error: '缺少主任务目标 objective' })
-            }
+          output: TEXT_OUTPUT,
+          async execute(args: any): Promise<string> {
+            const action = String(args?.action || 'list')
             try {
-              // 兼容 harness 传参差异：subtasks 可能是对象数组，也可能是 JSON 字符串
-              const subtasks: any =
-                typeof args.subtasks === 'string' ? JSON.parse(args.subtasks) : args.subtasks
-              const task = await orchestrator.dispatch({
-                title: args.title,
-                objective: args.objective,
-                subtasks,
-              })
-              return JSON.stringify(
-                {
-                  ok: true,
-                  message: '主任务已成功拆解并派发至各远程 DSH 执行节点',
-                  taskId: task.id,
-                  title: task.title,
-                  subtasksCount: task.subtasks.length,
-                  subtasks: task.subtasks.map((s) => ({
-                    id: s.id,
-                    title: s.title,
-                    agentId: s.remoteAgentId,
-                    status: s.status,
-                  })),
-                  consoleUrl: `${consoleUrl}#task-card-${task.id}`,
-                },
-                null,
-                2
-              )
+              switch (action) {
+                case 'list': return json(listAgents(deps))
+                case 'upsert': return json(upsertAgent(deps, args?.agent))
+                case 'delete': return json({ ok: deps.store.deleteAgent(resolveAgentId(deps, args?.agentId)) })
+                case 'ping': return json(await pingAgent(deps, args?.agentId))
+                case 'preview': return json(await previewAgent(deps, args?.agentId))
+                case 'models': return json(await remoteCatalog(deps, args?.agentId, 'models'))
+                case 'presets': return json(await remoteCatalog(deps, args?.agentId, 'presets'))
+                case 'sessions': return json({ ok: true, sessions: deps.store.listSessions() })
+                case 'session-clear': {
+                  const agentId = resolveAgentId(deps, args?.agentId)
+                  return json({ ok: true, cleared: deps.store.clearSessionsForAgent(agentId) })
+                }
+                case 'resources': return json(await listResources(deps, false))
+                case 'refresh': return json(await listResources(deps, true))
+                case 'resolve': return json(resolveMapping(deps, args?.mappingId))
+                case 'candidates': return json({ ok: true, candidates: deps.parser.candidates(String(args?.mappingId || '')) })
+                case 'skills': return json({ ok: true, skills: skillsOf(deps, args?.mappingId) })
+                case 'ssh-list': return json({ ok: true, resources: deps.sshStore.list().map(maskSshResource) })
+                case 'ssh-get': return json({ ok: true, resource: deps.sshStore.get(String(args?.resourceId || '')) || deps.sshStore.getByName(String(args?.resourceId || '')) })
+                case 'ssh-upsert': return json(upsertSsh(deps, args?.resource))
+                case 'ssh-delete': return json({ ok: deps.sshStore.delete(String(args?.resourceId || '')) })
+                case 'ssh-test': return json(await testSsh(deps, args))
+                case 'ssh-exec': return json(await execSsh(deps, args))
+                case 'settings-get': return json({ ok: true, settings: deps.store.getSettings(), storePath: deps.store.path })
+                case 'settings-set': return json({ ok: true, settings: deps.store.updateSettings(args?.settings || {}) })
+                default: return json({ ok: false, error: `不支持的 action: ${action}` })
+              }
             } catch (err: any) {
-              return JSON.stringify({ ok: false, error: err.message })
+              return json({ ok: false, error: errText(err) })
             }
           },
-        })
+        }),
       ),
-    '@dsh-external/dsh-remote-orchestrator: dispatch tool'
+    'onenat-workbuddy-mention: onenat_manage tool',
   )
+}
 
-  // 3. 查询主任务与子任务状态及日志
+function resolveAgentId(deps: ToolDeps, key: unknown): string {
+  const raw = String(key || '').trim()
+  if (!raw) return ''
+  return deps.store.findAgent(raw)?.id || raw
+}
+
+function listAgents(deps: ToolDeps): unknown {
+  return {
+    ok: true,
+    count: deps.store.getAgents().length,
+    agents: deps.store.getAgents().map((a) => ({
+      id: a.id,
+      name: a.name,
+      enabled: a.enabled,
+      dshRef: a.dshRef,
+      model: a.model,
+      workDir: a.workDir,
+      skills: a.skills || [],
+      resources: (a.resources || []).length,
+      description: a.description,
+      mention: `@${a.name}`,
+    })),
+    hint: '用户在输入框输入 @ 可从菜单直接选择这些子智能体。',
+  }
+}
+
+function upsertAgent(deps: ToolDeps, input: unknown): unknown {
+  const agent = typeof input === 'string' ? JSON.parse(input) : input
+  if (!agent || typeof agent !== 'object') return { ok: false, error: '缺少 agent 定义' }
+  if (!(agent as any).name) return { ok: false, error: '缺少 name' }
+  const saved = deps.store.upsertAgent(agent as Partial<SubAgent>)
+  return { ok: true, agent: saved }
+}
+
+async function pingAgent(deps: ToolDeps, key: unknown): Promise<unknown> {
+  const agent = deps.store.findAgent(String(key || ''))
+  if (!agent) return { ok: false, error: '子智能体不存在' }
+  const { target, ping } = await deps.resolver.resolveWithPing(agent)
+  return { ok: Boolean(ping?.ok), agent: agent.name, resolvedEntry: target?.baseUrl, ping }
+}
+
+async function previewAgent(deps: ToolDeps, key: unknown): Promise<unknown> {
+  const agent = deps.store.findAgent(String(key || ''))
+  if (!agent) return { ok: false, error: '子智能体不存在' }
+  await deps.directory.refresh(true).catch(() => {})
+  const { prompt, warnings } = await deps.runner.composePrompt(agent, '<任务正文将放在这里>', [], {
+    permission: agent.permission,
+  })
+  return { ok: true, agent: agent.name, prompt, warnings }
+}
+
+async function remoteCatalog(deps: ToolDeps, key: unknown, kind: 'models' | 'presets'): Promise<unknown> {
+  const agent = deps.store.findAgent(String(key || ''))
+  if (!agent) return { ok: false, error: '子智能体不存在' }
+  const target = await deps.resolver.resolve(agent)
+  if (!target.online || !target.baseUrl) return { ok: false, error: target.error || '入口解析失败' }
+  const client = new DshClient()
+  const result = kind === 'models' ? await client.getModels(target) : await client.getPresets(target)
+  return { ...result, ok: result.ok, target: target.baseUrl }
+}
+
+async function listResources(deps: ToolDeps, force: boolean): Promise<unknown> {
+  try {
+    await deps.directory.refresh(force)
+  } catch (err: any) {
+    return { ok: false, error: `ONENAT 资源刷新失败: ${errText(err)}` }
+  }
+  const endpoints = deps.directory.listEndpoints()
+  return {
+    ok: true,
+    fetchedAt: deps.directory.current()?.fetchedAt,
+    count: endpoints.length,
+    endpoints: endpoints.map((e) => ({
+      mappingId: e.mappingId,
+      appId: e.appId,
+      name: e.appName || e.note || e.mappingId,
+      kind: e.kind,
+      online: e.online,
+      entry: e.kind === 'ssh' ? `ssh -p ${e.port} @${e.host}` : (e.baseUrl || `${e.proto}://${e.host}:${e.port ?? '?'}`),
+      tunnel: e.tunnelName,
+      skills: e.appSkills?.map((s) => s.name),
+      mention: `@${e.appName || e.note || e.mappingId}`,
+    })),
+  }
+}
+
+function resolveMapping(deps: ToolDeps, mappingId: unknown): unknown {
+  const id = String(mappingId || '')
+  if (!id) return { ok: false, error: '缺少 mappingId' }
+  const ep = deps.directory.resolveMapping(id) || deps.directory.resolveApp(id)
+  return { ok: Boolean(ep), endpoint: ep }
+}
+
+function skillsOf(deps: ToolDeps, mappingId: unknown): unknown {
+  const id = String(mappingId || '')
+  const ep = id ? (deps.directory.resolveMapping(id) || deps.directory.resolveApp(id)) : undefined
+  return (ep?.appSkills || []).map((s) => ({ name: s.name, size: s.size, url: s.url }))
+}
+
+function upsertSsh(deps: ToolDeps, input: unknown): unknown {
+  const raw = typeof input === 'string' ? JSON.parse(input) : input
+  if (!raw || typeof raw !== 'object') return { ok: false, error: '缺少 resource 定义' }
+  const id = String((raw as any).id || '').trim()
+  const existing = id ? deps.sshStore.get(id) : undefined
+  const normalized = normalizeSshResource(raw as any, existing)
+  if (!normalized.id) normalized.id = newSshResourceId()
+  const saved = deps.sshStore.upsert(normalized)
+  return { ok: true, resource: maskSshResource(saved), mention: `@${saved.name}` }
+}
+
+function findSsh(deps: ToolDeps, key: unknown): ReturnType<SshResourceStore['get']> {
+  const raw = String(key || '')
+  return deps.sshStore.get(raw) || deps.sshStore.getByName(raw)
+}
+
+async function testSsh(deps: ToolDeps, args: any): Promise<unknown> {
+  const resource = findSsh(deps, args?.resourceId)
+  if (!resource) return { ok: false, error: 'SSH 资源不存在' }
+  const timeoutMs = Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : 8000
+  const result = await testSshResource(resource, timeoutMs)
+  deps.sshStore.update(resource.id, {
+    lastTestedAt: result.testedAt,
+    lastTestOk: result.ok,
+    lastTestError: result.ok ? undefined : result.error,
+  })
+  return { ok: result.ok, resource: resource.name, result }
+}
+
+async function execSsh(deps: ToolDeps, args: any): Promise<unknown> {
+  const resource = findSsh(deps, args?.resourceId)
+  if (!resource) return { ok: false, error: 'SSH 资源不存在' }
+  const command = String(args?.command || '')
+  if (!command.trim()) return { ok: false, error: '缺少 command' }
+  const timeoutMs = Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : 30_000
+  const result = await execOnSshResource(resource, command, timeoutMs)
+  return { ok: result.exitCode === 0, resource: resource.name, result }
+}
+
+// ------------------------------------------------------------- onenat_resource
+
+/**
+ * 资源「拉取式」查询：@ 注入是推送式的（提及即注入），本工具供模型主动查证——
+ * 例如：资源清单里的端口连不上时重新解析、或列出某资源附带的技能。
+ */
+function registerResourceTool(ctx: Context, deps: ToolDeps): void {
   ctx.effect(
     () =>
       ctx.tools.register(
         defineTool({
-          name: 'dsh_orchestrator_task_status',
+          name: 'onenat_resource',
           description:
-            '查询主任务及其各子任务的执行进度、状态、工作日志与最终质检总结报告',
+            '查询 OneNat 资源目录（实时公网入口）。action=list 列出全部资源；action=resolve 解析单个映射/app 的当前入口（端口漂移后复查用）；'
+            + 'action=skills 列出某资源自带技能清单；action=candidates 按关键字搜索可 @ 的实体（子智能体 + 资源）。',
           parameters: {
-            taskId: {
-              type: 'string',
-              description: '主任务 ID（若不传则返回所有任务概览）',
-            },
+            action: { type: 'string', description: 'list / resolve / skills / candidates' },
+            id: { type: 'string', description: 'mappingId / appId / ssh:<id>（resolve、skills 用）' },
+            query: { type: 'string', description: '搜索关键字（candidates 用）' },
           },
-          output: {
-            schema: { type: 'string' },
-            render: (_args: unknown, value: unknown) => [{ type: 'text', text: String(value) }],
-          },
-          async execute(args: any) {
-            if (!args.taskId) {
-              const tasks = store.getTasks()
-              return JSON.stringify(
-                {
-                  ok: true,
-                  count: tasks.length,
-                  tasks: tasks.map((t) => ({
-                    id: t.id,
-                    title: t.title,
-                    status: t.status,
-                    subtasksCount: t.subtasks.length,
-                    completedCount: t.subtasks.filter((s) => s.status === 'completed').length,
-                    createdAt: new Date(t.createdAt).toISOString(),
-                  })),
-                  consoleUrl,
-                },
-                null,
-                2
-              )
-            }
-
-            const task = store.getTask(args.taskId)
-            if (!task) {
-              return JSON.stringify({ ok: false, error: `未找到主任务: ${args.taskId}` })
-            }
-
-            return JSON.stringify(
-              {
-                ok: true,
-                task: {
-                  id: task.id,
-                  title: task.title,
-                  status: task.status,
-                  objective: task.objective,
-                  subtasks: task.subtasks.map((s) => ({
-                    id: s.id,
-                    title: s.title,
-                    status: s.status,
-                    remoteAgentId: s.remoteAgentId,
-                    remoteSessionId: s.remoteSessionId,
-                    logsCount: s.logs.length,
-                    recentLogs: s.logs.slice(-3),
-                    resultPreview: s.result?.content?.slice(0, 150),
-                  })),
-                  summary: task.summary,
-                },
-                consoleUrl: `${consoleUrl}#task-card-${task.id}`,
-              },
-              null,
-              2
-            )
-          },
-        })
-      ),
-    '@dsh-external/dsh-remote-orchestrator: task_status tool'
-  )
-
-  // 4. 查看子任务在远程 DSH 的完整聊天记录并可追问
-  ctx.effect(
-    () =>
-      ctx.tools.register(
-        defineTool({
-          name: 'dsh_orchestrator_subtask_chat',
-          description:
-            '查看指定子任务在远程 DSH 会话上的完整聊天消息记录，或向该远程会话发送追问指令',
-          parameters: {
-            taskId: {
-              type: 'string',
-              description: '主任务 ID',
-            },
-            subtaskId: {
-              type: 'string',
-              description: '子任务 ID',
-            },
-            followupMessage: {
-              type: 'string',
-              description: '可选的追问消息。提供后将直接发送给远程会话并等待回复。',
-            },
-          },
-          output: {
-            schema: { type: 'string' },
-            render: (_args: unknown, value: unknown) => [{ type: 'text', text: String(value) }],
-          },
-          async execute(args: any) {
-            if (!args.taskId || !args.subtaskId) {
-              return JSON.stringify({ ok: false, error: '缺少 taskId 或 subtaskId' })
-            }
-
-            // 如果有追问内容，先发送追问
-            if (args.followupMessage && args.followupMessage.trim()) {
-              const res = await orchestrator.sendFollowupToSubtask(
-                args.taskId,
-                args.subtaskId,
-                args.followupMessage.trim()
-              )
-              if (!res.ok) {
-                return JSON.stringify({ ok: false, error: `发送追问失败: ${res.error}` })
+          output: TEXT_OUTPUT,
+          async execute(args: any): Promise<string> {
+            const action = String(args?.action || 'list')
+            try {
+              if (action === 'candidates') {
+                return json({ ok: true, candidates: deps.parser.candidates(String(args?.query || '')) })
               }
+              if (action === 'resolve') {
+                await deps.directory.refresh(true)
+                const id = String(args?.id || '')
+                if (id.startsWith('ssh:')) {
+                  const ssh = deps.sshStore.get(id.slice(4))
+                  return json({ ok: Boolean(ssh), resource: ssh ? { id, name: ssh.name, host: ssh.host, port: ssh.port } : undefined })
+                }
+                const ep = deps.directory.resolveMapping(id) || deps.directory.resolveApp(id)
+                return json({ ok: Boolean(ep), endpoint: ep })
+              }
+              if (action === 'skills') {
+                return json({ ok: true, skills: skillsOf(deps, args?.id) })
+              }
+              return json(await listResources(deps, false))
+            } catch (err: any) {
+              return json({ ok: false, error: errText(err) })
             }
-
-            const chatRes = await orchestrator.getSubtaskChat(args.taskId, args.subtaskId)
-            return JSON.stringify(chatRes, null, 2)
           },
-        })
+        }),
       ),
-    '@dsh-external/dsh-remote-orchestrator: subtask_chat tool'
+    'onenat-workbuddy-mention: onenat_resource tool',
   )
+}
 
-  // 5. 决定主任务完成状态并生成总结报告
+/** ssh-exec 兼容入口：部分场景模型更愿意直接"在这个资源上跑条命令" */
+function registerSshExecTool(ctx: Context, deps: ToolDeps): void {
   ctx.effect(
     () =>
       ctx.tools.register(
         defineTool({
-          name: 'dsh_orchestrator_evaluate_task',
+          name: 'onenat_ssh',
           description:
-            '检查主任务的所有子任务完成情况，综合各子任务产出做出最终完成状态判定，生成完整总结报告',
+            '在本地 SSH 资源池中的主机上执行命令（用已存凭据，无需自己拼 ssh 参数）：'
+            + 'action=exec 执行命令、action=list 列出资源、action=test 测连通、action=get 取完整凭据（含密码/私钥）。',
           parameters: {
-            taskId: {
-              type: 'string',
-              description: '主任务 ID',
-            },
+            action: { type: 'string', description: 'exec / list / test / get' },
+            resource: { type: 'string', description: 'SSH 资源名称或 ID' },
+            command: { type: 'string', description: 'exec 要执行的命令' },
+            timeoutMs: { type: 'number', description: '超时毫秒（默认 exec 30000 / test 8000）' },
           },
-          output: {
-            schema: { type: 'string' },
-            render: (_args: unknown, value: unknown) => [{ type: 'text', text: String(value) }],
-          },
-          async execute(args: any) {
-            if (!args.taskId) return JSON.stringify({ ok: false, error: '缺少 taskId' })
-            const task = await orchestrator.evaluateAndSummarizeTask(args.taskId)
-            if (!task) return JSON.stringify({ ok: false, error: `未找到任务: ${args.taskId}` })
-            return JSON.stringify(
-              {
-                ok: true,
-                taskId: task.id,
-                finalStatus: task.status,
-                summary: task.summary,
-              },
-              null,
-              2
-            )
-          },
-        })
-      ),
-    '@dsh-external/dsh-remote-orchestrator: evaluate_task tool'
-  )
-
-  // 6. SSH 连接资源管理工具
-  ctx.effect(
-    () =>
-      ctx.tools.register(
-        defineTool({
-          name: 'dsh_ssh_resource_manage',
-          description:
-            'SSH 连接资源管理：记录可连接的 SSH 账号与凭据（密码/私钥），按连接方式+主机 IP 增删改查。' +
-            'list 脱敏列表；get 按 id/name 取完整凭据供连接使用；upsert 添加或修改；delete 删除；' +
-            'test 用已存凭据做真实 SSH 连接测试；exec 直接在远程主机执行命令（免手工传密钥）。',
-          parameters: {
-            action: {
-              type: 'string',
-              description:
-                '操作类型: list(列出,脱敏) / get(取完整凭据) / upsert(添加或更新) / delete(删除) / test(连接测试) / exec(远程执行命令)',
-            },
-            resource: {
-              type: 'json',
-              description:
-                'SSH 资源对象（upsert 用）：{ id?, name, host, port?, authType: "password"|"key", username, password?, privateKey?, passphrase?, description?, tags? }',
-            },
-            resourceId: {
-              type: 'string',
-              description: 'SSH 资源 ID（get/delete/test/exec 用；exec/test 也接受 name）',
-            },
-            name: {
-              type: 'string',
-              description: 'SSH 资源名称（get/test/exec 可用名称代替 resourceId）',
-            },
-            query: {
-              type: 'string',
-              description: 'list 的过滤关键字（匹配 id/name/host/username/tags/description）',
-            },
-            command: {
-              type: 'string',
-              description: 'exec 操作要在远程主机执行的 shell 命令',
-            },
-            timeoutMs: {
-              type: 'string',
-              description: 'test/exec 超时毫秒数（默认 test 8000 / exec 30000）',
-            },
-          },
-          output: {
-            schema: { type: 'string' },
-            render: (_args: unknown, value: unknown) => [{ type: 'text', text: String(value) }],
-          },
-          async execute(args: any) {
-            const action = args.action || 'list'
-            const findResource = (): SshResource | undefined => {
-              if (args.resourceId) return sshStore.get(args.resourceId)
-              if (args.name) {
-                // 先按名称精确匹配，再回退按 id 匹配（容错 AI 传 id 到 name 参数）
-                return sshStore.getByName(args.name) ?? sshStore.get(args.name)
+          output: TEXT_OUTPUT,
+          async execute(args: any): Promise<string> {
+            const action = String(args?.action || 'list')
+            try {
+              if (action === 'list') return json({ ok: true, resources: deps.sshStore.list().map(maskSshResource) })
+              if (action === 'get') {
+                const resource = findSsh(deps, args?.resource)
+                return json({ ok: Boolean(resource), resource })
               }
-              return undefined
+              if (action === 'test') return json(await testSsh(deps, { resourceId: args?.resource, timeoutMs: args?.timeoutMs }))
+              if (action === 'exec') return json(await execSsh(deps, { resourceId: args?.resource, command: args?.command, timeoutMs: args?.timeoutMs }))
+              return json({ ok: false, error: `不支持的 action: ${action}` })
+            } catch (err: any) {
+              if (err instanceof SshInputError) return json({ ok: false, error: err.message })
+              return json({ ok: false, error: errText(err) })
             }
-
-            if (action === 'list') {
-              const keyword = String(args.query || '').toLowerCase()
-              const list = sshStore
-                .list()
-                .map(maskSshResource)
-                .filter((r: any) =>
-                  keyword
-                    ? [r.id, r.name, r.host, r.username, r.authType, r.description || '', ...(r.tags || [])]
-                        .join(' ')
-                        .toLowerCase()
-                        .includes(keyword)
-                    : true
-                )
-              return JSON.stringify(
-                {
-                  ok: true,
-                  count: list.length,
-                  note: '凭据已脱敏；需要明文密码/私钥时用 action=get 按 id 或 name 获取',
-                  resources: list,
-                },
-                null,
-                2
-              )
-            }
-
-            if (action === 'get') {
-              const r = findResource()
-              if (!r) return JSON.stringify({ ok: false, error: '未找到指定 SSH 资源（提供 resourceId 或 name）' })
-              return JSON.stringify({ ok: true, resource: r }, null, 2)
-            }
-
-            if (action === 'upsert') {
-              if (!args.resource) return JSON.stringify({ ok: false, error: '缺少 resource 对象' })
-              try {
-                // 兼容 harness 传参差异：resource 可能是对象，也可能是 JSON 字符串
-                const input: any = typeof args.resource === 'string' ? JSON.parse(args.resource) : args.resource
-                const existing = input.id ? sshStore.get(input.id) : undefined
-                const normalized = normalizeSshResource(input, existing)
-                const saved = sshStore.upsert(normalized)
-                return JSON.stringify(
-                  { ok: true, message: 'SSH 连接资源已保存', resource: maskSshResource(saved) },
-                  null,
-                  2
-                )
-              } catch (err: any) {
-                return JSON.stringify({ ok: false, error: err.message })
-              }
-            }
-
-            if (action === 'delete') {
-              const r = findResource()
-              if (!r) return JSON.stringify({ ok: false, error: '未找到指定 SSH 资源' })
-              const deleted = sshStore.delete(r.id)
-              return JSON.stringify({ ok: true, deleted, id: r.id, name: r.name })
-            }
-
-            if (action === 'test') {
-              const r = findResource()
-              if (!r) return JSON.stringify({ ok: false, error: '未找到指定 SSH 资源' })
-              const timeout = Number(args.timeoutMs) || 8000
-              const result = await testSshResource(r, timeout)
-              sshStore.update(r.id, {
-                lastTestedAt: result.testedAt,
-                lastTestOk: result.ok,
-                lastTestError: result.ok ? undefined : result.error,
-              })
-              return JSON.stringify(
-                {
-                  ok: true,
-                  name: r.name,
-                  test: result,
-                  hint: result.degraded ? '环境缺少 ssh2，仅完成 TCP 端口探测' : undefined,
-                },
-                null,
-                2
-              )
-            }
-
-            if (action === 'exec') {
-              const r = findResource()
-              if (!r) return JSON.stringify({ ok: false, error: '未找到指定 SSH 资源' })
-              if (!args.command) return JSON.stringify({ ok: false, error: '缺少 command' })
-              const timeout = Number(args.timeoutMs) || 30000
-              const result = await execOnSshResource(r, String(args.command), timeout)
-              return JSON.stringify({ ok: true, name: r.name, exec: result }, null, 2)
-            }
-
-            return JSON.stringify({ ok: false, error: `不支持的 action: ${action}` })
           },
-        })
+        }),
       ),
-    '@dsh-external/dsh-remote-orchestrator: ssh_resource_manage tool'
+    'onenat-workbuddy-mention: onenat_ssh tool',
   )
+}
+
+/** 供 system-prompt 段复用的子智能体花名册渲染 */
+export function renderAgentRoster(store: WorkStore, max = 20): string {
+  const agents = store.getAgents().filter((a) => a.enabled !== false)
+  if (agents.length === 0) return ''
+  const lines = agents.slice(0, max).map((a) => `- ${a.name}：${a.description || a.model || '远端 DSH 子智能体'}（id ${a.id}）`)
+  if (agents.length > max) lines.push(`- …另有 ${agents.length - max} 个（onenat_manage {action:"list"} 查看全部）`)
+  return lines.join('\n')
 }

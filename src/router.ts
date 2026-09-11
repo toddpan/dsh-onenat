@@ -1,35 +1,45 @@
 /**
- * @dsh-external/dsh-remote-orchestrator - HTTP Router & API Dispatcher
+ * @dsh-external/onenat-workbuddy-mention - 管理 API（设置页 UI 专用）
+ *
+ * 只在 DSH 本地 GUI 后面服务：设置页与模型工具共用同一份存储与服务。
+ * 前缀：<pathPrefix>/api/*
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { OrchestratorStore } from './store.js'
+import type { OnenatDirectory } from './onenat.js'
+import type { AgentResolver } from './resolver.js'
+import type { MentionParser } from './mentions.js'
+import type { AgentRunner } from './agent-runner.js'
 import type { SshResourceStore } from './ssh-store.js'
-import type { TaskOrchestrator } from './orchestrator.js'
-import { RemoteDshClient } from './remote-client.js'
-import { SshInputError, execOnSshResource, maskSshResource, normalizeSshResource, testSshResource } from './ssh-resources.js'
-import { renderWebUi } from './web-ui.js'
+import type { WorkStore } from './store.js'
+import { DshClient } from './remote-client.js'
+import {
+  SshInputError,
+  execOnSshResource,
+  maskSshResource,
+  newSshResourceId,
+  normalizeSshResource,
+  testSshResource,
+} from './ssh-resources.js'
+import type { SubAgent } from './types.js'
 
-export class OrchestratorRouter {
-  private store: OrchestratorStore
-  private sshStore: SshResourceStore
-  private orchestrator: TaskOrchestrator
-  private client: RemoteDshClient
+export interface RouterDeps {
+  store: WorkStore
+  directory: OnenatDirectory
+  resolver: AgentResolver
+  runner: AgentRunner
+  parser: MentionParser
+  sshStore: SshResourceStore
+  log: (msg: string) => void
+}
 
-  constructor(store: OrchestratorStore, orchestrator: TaskOrchestrator, sshStore: SshResourceStore) {
-    this.store = store
-    this.orchestrator = orchestrator
-    this.sshStore = sshStore
-    this.client = new RemoteDshClient()
-  }
+export class ManageRouter {
+  constructor(private deps: RouterDeps) {}
 
-  private sendJson(res: ServerResponse, statusCode: number, data: any): void {
+  private sendJson(res: ServerResponse, statusCode: number, data: unknown): void {
     res.statusCode = statusCode
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     res.setHeader('Cache-Control', 'no-store')
-    res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
     res.end(JSON.stringify(data))
   }
 
@@ -38,6 +48,7 @@ export class OrchestratorRouter {
       let body = ''
       req.on('data', (chunk) => {
         body += chunk
+        if (body.length > 4 * 1024 * 1024) req.destroy()
       })
       req.on('end', () => {
         try {
@@ -50,305 +61,159 @@ export class OrchestratorRouter {
     })
   }
 
+  /** @returns 是否已处理 */
   public async dispatch(req: IncomingMessage, res: ServerResponse, prefix: string): Promise<boolean> {
-    const rawUrl = req.url || '/'
+    const url = new URL(req.url || '/', 'http://127.0.0.1')
     const method = (req.method || 'GET').toUpperCase()
+    const path = url.pathname.slice(prefix.length) || '/'
+    const { store, directory, resolver, runner, parser, sshStore } = this.deps
 
-    // 处理 CORS 预检请求
-    if (method === 'OPTIONS') {
-      res.statusCode = 204
-      res.setHeader('Access-Control-Allow-Origin', '*')
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-      res.end()
-      return true
-    }
-
-    // 规范化 URL 路径，剥离查询参数
-    const urlObj = new URL(rawUrl, 'http://localhost')
-    const pathname = urlObj.pathname
-
-    // 检查是否属于本路由前缀
-    if (!pathname.startsWith(prefix)) {
-      return false
-    }
-
-    const relPath = pathname.slice(prefix.length) || '/'
-
-    // 1. Web UI 控制台首页 (GET / 或 GET /console)
-    if (method === 'GET' && (relPath === '' || relPath === '/' || relPath === '/console')) {
-      const html = renderWebUi(`${prefix}/api`)
-      res.statusCode = 200
-      res.setHeader('Content-Type', 'text/html; charset=utf-8')
-      res.setHeader('Cache-Control', 'no-store')
-      res.end(html)
-      return true
-    }
-
-    // 2. Agents CRUD 路由
-    if (relPath === '/api/agents') {
-      if (method === 'GET') {
-        const agents = this.store.getAgents()
-        this.sendJson(res, 200, { ok: true, data: agents })
+    try {
+      if (path === '/api/settings' && method === 'GET') {
+        this.sendJson(res, 200, { ok: true, data: { settings: store.getSettings(), storePath: store.path } })
         return true
       }
-      if (method === 'POST') {
+      if (path === '/api/settings' && (method === 'POST' || method === 'PATCH')) {
         const body = await this.parseBody(req)
-        if (!body.id || !body.name || !body.apiBaseUrl) {
-          this.sendJson(res, 400, { ok: false, error: 'id, name, apiBaseUrl 为必填项' })
-          return true
+        const settings = store.updateSettings(body || {})
+        if (settings.onenat) {
+          directory.configure(settings.onenat.baseUrl, settings.onenat.apiKey)
+          directory.startAutoRefresh(settings.onenat.autoRefreshMs)
         }
-        const saved = this.store.upsertAgent(body)
-        this.sendJson(res, 200, { ok: true, data: saved })
+        this.sendJson(res, 200, { ok: true, data: settings })
         return true
       }
-    }
 
-    // 单个 Agent 删除
-    const agentMatch = /^\/api\/agents\/([^\/]+)$/.exec(relPath)
-    if (agentMatch) {
-      const agentId = decodeURIComponent(agentMatch[1])
-      if (method === 'DELETE') {
-        const success = this.store.deleteAgent(agentId)
-        this.sendJson(res, 200, { ok: true, data: { deleted: success, agentId } })
+      if (path === '/api/agents' && method === 'GET') {
+        this.sendJson(res, 200, { ok: true, data: store.getAgents() })
         return true
       }
-    }
-
-    // 测试已保存 Agent 连通性
-    const pingAgentMatch = /^\/api\/agents\/([^\/]+)\/ping$/.exec(relPath)
-    if (pingAgentMatch && method === 'POST') {
-      const agentId = decodeURIComponent(pingAgentMatch[1])
-      const agent = this.store.getAgent(agentId)
-      if (!agent) {
-        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
-        return true
-      }
-      const pingRes = await this.client.ping(agent)
-      this.sendJson(res, 200, { ok: true, data: pingRes })
-      return true
-    }
-
-    // 表单快速 Ping 测试任意 URL
-    if (relPath === '/api/ping-test' && method === 'POST') {
-      const body = await this.parseBody(req)
-      if (!body.apiBaseUrl) {
-        this.sendJson(res, 400, { ok: false, error: '缺少 apiBaseUrl' })
-        return true
-      }
-      const tempAgent: any = {
-        id: 'temp',
-        name: 'temp',
-        apiBaseUrl: body.apiBaseUrl,
-        apiKey: body.apiKey,
-      }
-      const pingRes = await this.client.ping(tempAgent)
-      this.sendJson(res, 200, { ok: true, data: pingRes })
-      return true
-    }
-
-    // 获取已保存节点的远程可用模型列表（含节点默认模型）
-    const modelsAgentMatch = /^\/api\/agents\/([^\/]+)\/models$/.exec(relPath)
-    if (modelsAgentMatch && method === 'GET') {
-      const agentId = decodeURIComponent(modelsAgentMatch[1])
-      const agent = this.store.getAgent(agentId)
-      if (!agent) {
-        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
-        return true
-      }
-      const modelsRes = await this.client.getModels(agent)
-      this.sendJson(res, 200, { ok: modelsRes.ok, data: modelsRes })
-      return true
-    }
-
-    // 表单快速拉取任意 URL 的可用模型列表（保存节点前即可预览选择）
-    if (relPath === '/api/models-test' && method === 'POST') {
-      const body = await this.parseBody(req)
-      if (!body.apiBaseUrl) {
-        this.sendJson(res, 400, { ok: false, error: '缺少 apiBaseUrl' })
-        return true
-      }
-      const tempAgent: any = {
-        id: 'temp',
-        name: 'temp',
-        apiBaseUrl: body.apiBaseUrl,
-        apiKey: body.apiKey,
-      }
-      const modelsRes = await this.client.getModels(tempAgent)
-      this.sendJson(res, 200, { ok: modelsRes.ok, data: modelsRes })
-      return true
-    }
-
-    // 获取已保存节点的远程可用 Agent Preset 列表
-    const presetsAgentMatch = /^\/api\/agents\/([^\/]+)\/presets$/.exec(relPath)
-    if (presetsAgentMatch && method === 'GET') {
-      const agentId = decodeURIComponent(presetsAgentMatch[1])
-      const agent = this.store.getAgent(agentId)
-      if (!agent) {
-        this.sendJson(res, 404, { ok: false, error: 'Agent not found' })
-        return true
-      }
-      const presetsRes = await this.client.getPresets(agent)
-      this.sendJson(res, 200, { ok: presetsRes.ok, data: presetsRes })
-      return true
-    }
-
-    // 表单快速拉取任意 URL 的可用 Agent Preset 列表（远端需 dsh-web-service >= 0.0.2）
-    if (relPath === '/api/presets-test' && method === 'POST') {
-      const body = await this.parseBody(req)
-      if (!body.apiBaseUrl) {
-        this.sendJson(res, 400, { ok: false, error: '缺少 apiBaseUrl' })
-        return true
-      }
-      const tempAgent: any = {
-        id: 'temp',
-        name: 'temp',
-        apiBaseUrl: body.apiBaseUrl,
-        apiKey: body.apiKey,
-      }
-      const presetsRes = await this.client.getPresets(tempAgent)
-      this.sendJson(res, 200, { ok: presetsRes.ok, data: presetsRes })
-      return true
-    }
-
-    // 3. Tasks CRUD 路由
-    if (relPath === '/api/tasks') {
-      if (method === 'GET') {
-        const tasks = this.store.getTasks()
-        this.sendJson(res, 200, { ok: true, data: tasks })
-        return true
-      }
-      if (method === 'POST') {
+      if (path === '/api/agents' && method === 'POST') {
         const body = await this.parseBody(req)
-        if (!body.objective) {
-          this.sendJson(res, 400, { ok: false, error: '缺少必填字段 objective' })
+        if (!body?.name) {
+          this.sendJson(res, 400, { ok: false, error: '缺少 name' })
           return true
         }
-        try {
-          const task = await this.orchestrator.dispatch(body)
-          this.sendJson(res, 201, { ok: true, data: task })
-        } catch (err: any) {
-          this.sendJson(res, 500, { ok: false, error: err.message })
-        }
+        this.sendJson(res, 200, { ok: true, data: store.upsertAgent(body as Partial<SubAgent>) })
         return true
       }
-    }
-
-    // 单个 Task 获取与删除
-    const taskMatch = /^\/api\/tasks\/([^\/]+)$/.exec(relPath)
-    if (taskMatch) {
-      const taskId = decodeURIComponent(taskMatch[1])
-      if (method === 'GET') {
-        const task = this.store.getTask(taskId)
-        if (!task) {
-          this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+      const agentMatch = /^\/api\/agents\/([^/]+)(?:\/([a-z-]+))?$/.exec(path)
+      if (agentMatch) {
+        const id = decodeURIComponent(agentMatch[1]!)
+        const sub = agentMatch[2]
+        const agent = store.findAgent(id)
+        if (!sub && method === 'DELETE') {
+          this.sendJson(res, 200, { ok: true, data: { deleted: store.deleteAgent(agent?.id || id) } })
           return true
         }
-        this.sendJson(res, 200, { ok: true, data: task })
-        return true
+        if (!agent) {
+          this.sendJson(res, 404, { ok: false, error: '子智能体不存在' })
+          return true
+        }
+        if (sub === 'ping' && method === 'POST') {
+          const { target, ping } = await resolver.resolveWithPing(agent)
+          this.sendJson(res, 200, { ok: true, data: { ping, resolved: target } })
+          return true
+        }
+        if (sub === 'models' && method === 'GET') {
+          const target = await resolver.resolve(agent)
+          const result = target.online ? await new DshClient().getModels(target) : { ok: false, error: target.error }
+          this.sendJson(res, 200, { ok: true, data: result })
+          return true
+        }
+        if (sub === 'presets' && method === 'GET') {
+          const target = await resolver.resolve(agent)
+          const result = target.online ? await new DshClient().getPresets(target) : { ok: false, error: target.error }
+          this.sendJson(res, 200, { ok: true, data: result })
+          return true
+        }
+        if (sub === 'preview' && method === 'GET') {
+          await directory.refresh(true).catch(() => {})
+          const composed = await runner.composePrompt(agent, '<任务正文将放在这里>', [], { permission: agent.permission })
+          this.sendJson(res, 200, { ok: true, data: composed })
+          return true
+        }
+        if (sub === 'session' && method === 'DELETE') {
+          this.sendJson(res, 200, { ok: true, data: { cleared: store.clearSessionsForAgent(agent.id) } })
+          return true
+        }
       }
-      if (method === 'DELETE') {
-        const success = this.store.deleteTask(taskId)
-        this.sendJson(res, 200, { ok: true, data: { deleted: success, taskId } })
-        return true
-      }
-    }
 
-    // 单个 Task 手动重新触发总结判定
-    const summaryMatch = /^\/api\/tasks\/([^\/]+)\/summary$/.exec(relPath)
-    if (summaryMatch && method === 'POST') {
-      const taskId = decodeURIComponent(summaryMatch[1])
-      const task = await this.orchestrator.evaluateAndSummarizeTask(taskId)
-      if (!task) {
-        this.sendJson(res, 404, { ok: false, error: 'Task not found' })
+      if (path === '/api/resources' && method === 'GET') {
+        await directory.refresh(url.searchParams.get('refresh') === '1')
+        this.sendJson(res, 200, {
+          ok: true,
+          data: { fetchedAt: directory.current()?.fetchedAt, endpoints: directory.listEndpoints() },
+        })
         return true
       }
-      this.sendJson(res, 200, { ok: true, data: task })
-      return true
-    }
-
-    // 获取子任务聊天历史
-    const chatMatch = /^\/api\/tasks\/([^\/]+)\/subtasks\/([^\/]+)\/chat$/.exec(relPath)
-    if (chatMatch && method === 'GET') {
-      const taskId = decodeURIComponent(chatMatch[1])
-      const subtaskId = decodeURIComponent(chatMatch[2])
-      const chatRes = await this.orchestrator.getSubtaskChat(taskId, subtaskId)
-      this.sendJson(res, 200, { ok: chatRes.ok, data: chatRes })
-      return true
-    }
-
-    // 在子任务聊天窗口中发送追问
-    const followupMatch = /^\/api\/tasks\/([^\/]+)\/subtasks\/([^\/]+)\/followup$/.exec(relPath)
-    if (followupMatch && method === 'POST') {
-      const taskId = decodeURIComponent(followupMatch[1])
-      const subtaskId = decodeURIComponent(followupMatch[2])
-      const body = await this.parseBody(req)
-      if (!body.message) {
-        this.sendJson(res, 400, { ok: false, error: '缺少 message' })
+      if (path === '/api/candidates' && method === 'GET') {
+        this.sendJson(res, 200, { ok: true, data: parser.candidates(url.searchParams.get('q') || '') })
         return true
       }
-      const followRes = await this.orchestrator.sendFollowupToSubtask(taskId, subtaskId, body.message)
-      this.sendJson(res, 200, followRes)
-      return true
-    }
-
-    // 4. SSH 连接资源 CRUD 路由
-    if (relPath === '/api/ssh-resources') {
-      if (method === 'GET') {
-        this.sendJson(res, 200, { ok: true, data: this.sshStore.list().map(maskSshResource) })
-        return true
-      }
-      if (method === 'POST') {
+      if (path === '/api/debug/parse' && method === 'POST') {
         const body = await this.parseBody(req)
-        try {
-          const existing = body.id ? this.sshStore.get(body.id) : undefined
-          const normalized = normalizeSshResource(body, existing)
-          const saved = this.sshStore.upsert(normalized)
-          this.sendJson(res, 200, { ok: true, data: maskSshResource(saved) })
-        } catch (err: any) {
-          this.sendJson(res, 400, { ok: false, error: err.message })
-        }
+        this.sendJson(res, 200, { ok: true, data: parser.parse(String(body?.text || '')) })
         return true
       }
-    }
 
-    // 单个 SSH 资源：取完整凭据（编辑表单用）与删除
-    const sshMatch = /^\/api\/ssh-resources\/([^\/]+)$/.exec(relPath)
-    if (sshMatch) {
-      const sshId = decodeURIComponent(sshMatch[1])
-      if (method === 'GET') {
-        const r = this.sshStore.get(sshId)
-        if (!r) {
-          this.sendJson(res, 404, { ok: false, error: 'SSH resource not found' })
+      if (path === '/api/ssh' && method === 'GET') {
+        this.sendJson(res, 200, { ok: true, data: sshStore.list().map(maskSshResource) })
+        return true
+      }
+      if (path === '/api/ssh' && method === 'POST') {
+        const body = await this.parseBody(req)
+        const existing = body?.id ? sshStore.get(String(body.id)) : undefined
+        const normalized = normalizeSshResource(body || {}, existing)
+        if (!normalized.id) normalized.id = newSshResourceId()
+        this.sendJson(res, 200, { ok: true, data: maskSshResource(sshStore.upsert(normalized)) })
+        return true
+      }
+      const sshMatch = /^\/api\/ssh\/([^/]+)(?:\/([a-z-]+))?$/.exec(path)
+      if (sshMatch) {
+        const key = decodeURIComponent(sshMatch[1]!)
+        const sub = sshMatch[2]
+        const resource = sshStore.get(key) || sshStore.getByName(key)
+        if (!resource) {
+          this.sendJson(res, 404, { ok: false, error: 'SSH 资源不存在' })
           return true
         }
-        this.sendJson(res, 200, { ok: true, data: r })
+        if (!sub && method === 'GET') {
+          this.sendJson(res, 200, { ok: true, data: resource })
+          return true
+        }
+        if (!sub && method === 'DELETE') {
+          this.sendJson(res, 200, { ok: true, data: { deleted: sshStore.delete(resource.id) } })
+          return true
+        }
+        if (sub === 'test' && method === 'POST') {
+          const result = await testSshResource(resource, 8000)
+          sshStore.update(resource.id, {
+            lastTestedAt: result.testedAt,
+            lastTestOk: result.ok,
+            lastTestError: result.ok ? undefined : result.error,
+          })
+          this.sendJson(res, 200, { ok: true, data: result })
+          return true
+        }
+        if (sub === 'exec' && method === 'POST') {
+          const body = await this.parseBody(req)
+          const command = String(body?.command || '')
+          if (!command.trim()) {
+            this.sendJson(res, 400, { ok: false, error: '缺少 command' })
+            return true
+          }
+          const result = await execOnSshResource(resource, command, Number(body?.timeoutMs) || 30_000)
+          this.sendJson(res, 200, { ok: true, data: result })
+          return true
+        }
+      }
+    } catch (err: any) {
+      if (err instanceof SshInputError) {
+        this.sendJson(res, 400, { ok: false, error: err.message })
         return true
       }
-      if (method === 'DELETE') {
-        const success = this.sshStore.delete(sshId)
-        this.sendJson(res, 200, { ok: true, data: { deleted: success, sshId } })
-        return true
-      }
-    }
-
-    // SSH 资源连接测试（真实 SSH 认证握手）
-    const sshTestMatch = /^\/api\/ssh-resources\/([^\/]+)\/test$/.exec(relPath)
-    if (sshTestMatch && method === 'POST') {
-      const sshId = decodeURIComponent(sshTestMatch[1])
-      const r = this.sshStore.get(sshId)
-      if (!r) {
-        this.sendJson(res, 404, { ok: false, error: 'SSH resource not found' })
-        return true
-      }
-      const body = await this.parseBody(req)
-      const result = await testSshResource(r, Number(body?.timeoutMs) || 8000)
-      this.sshStore.update(r.id, {
-        lastTestedAt: result.testedAt,
-        lastTestOk: result.ok,
-        lastTestError: result.ok ? undefined : result.error,
-      })
-      this.sendJson(res, 200, { ok: true, data: result })
+      this.sendJson(res, 500, { ok: false, error: String(err?.message || err) })
       return true
     }
 
