@@ -96,6 +96,20 @@ onenat_agent({
 
 ## 安装与注入
 
+### 方式 A：标准 bundle 安装（DSH 插件市场同款命令）
+
+仓库根已声明 `dsh.bundle.patch`（cordis.patch.yml），`lib/` 预构建随仓库分发，无需本地编译：
+
+```bash
+dsh plugin --profile web add https://github.com/toddpan/onenat-workbuddy-mention
+```
+
+> **先卸注入版再装**：本机若还在经 `dev_inject_plugin` 注入本插件，先用 `dev_uninject_plugin {"match": "onenat-workbuddy-mention"}` 卸载再走方式 A，否则两条通道会重复注册同名工具与路由。
+
+> **首次安装若报 `ERR_PNPM_IGNORED_BUILDS`**：依赖 `ssh2` 带可选原生加速脚本，pnpm ≥10 默认拦截。按 CLI 提示把 profile 目录 `pnpm-workspace.yaml` 里 `allowBuilds` 下的 `ssh2` / `cpu-features` 设为 `true` 后重跑一次即可（装过 dsh-remote-orchestrator 的 profile 通常已放行）。不放心可设 `false`——本插件的连接测试会退化为纯 TCP 探测，只是认证握手与远程执行不可用。
+
+### 方式 B：开发态注入（本仓库日常开发）
+
 ```bash
 cd /Users/tsbj/feyanggit/DHS-test/onenat-workbuddy-mention
 bash scripts/build.sh      # host：tsc → lib/（自动链接 DSH checkout 依赖）
