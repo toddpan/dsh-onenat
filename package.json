@@ -5,7 +5,7 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/toddpan/dsh-remote-orchestrator.git"
+    "url": "https://github.com/toddpan/onenat-workbuddy.git"
   },
   "keywords": [
     "deepseek-harness",

@@ -67,6 +67,11 @@ link_pkg @deepseek-ai/dsh-client-ui-slots packages/client/ui-slots
 # @types/node（编译类型；checkout 自带）
 link_pkg @types/node node_modules/@types/node
 
+# @types/react-dom（浏览器半边 createPortal 的类型；只存在于 checkout 的 apps/web，缺失则跳过）
+if [ -d "$CHECKOUT/apps/web/node_modules/@types/react-dom" ] && [ ! -e node_modules/@types/react-dom ]; then
+  link_pkg @types/react-dom apps/web/node_modules/@types/react-dom
+fi
+
 # ssh2（SSH 连接资源 test/exec 的运行时依赖；已声明在 package.json dependencies）
 # 构建期链接：优先 profile node_modules，其次 checkout node_modules；都没有则跳过（运行时降级 TCP 探测）
 if [ ! -e node_modules/ssh2 ]; then

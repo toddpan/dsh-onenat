@@ -41,12 +41,20 @@ DSH 输入框 ──@──► ① ONENAT 子智能体   选谁干活
 
 ### ① 子智能体管理
 
-设置页「WorkBuddy @」→ ③ 子智能体管理：
+设置页「WorkBuddy @」→ 子智能体卡片：
 
 - 从下拉里选 **ONENAT 映射 / 应用**（只存稳定 ID → 端口漂移免疫）或直连 URL（兜底）；
-- 配 preset / model / 运行权限 / **远端工作目录** / 角色提示词 / 已装技能（写 `/名` 手势）/ 说明；
-- 一键 **探测**（实时解析入口 + ping 远端 dsh-web-service）、**提示词预览**（脱敏）；
-- `@` 名称唯一化建议（便于指名）。
+- **模式（agentPreset）/ Provider / 模型来自该远端 DSH 的实时清单**：填好绑定后编辑器自动
+  拉取 `/presets`、`/models`（保存之前也能拉，Host 用表单里的 `dshRef` 现场解析），
+  拉不到时自动退化为手工输入；
+- **工作目录可以「浏览远端…」**：弹出的目录窗口直接读远端 `dsh-web-service` 的 `/fs/list`，
+  支持主目录、上级、绝对路径跳转、显示隐藏目录、新建文件夹，选中即回填；
+- 「拉取远端技能清单」把远端已装技能渲染成可点选 chips，点选即写入 `/名` 手势清单；
+- 运行权限（read-only / workspace-write / danger-full-access / 自定义）/ 角色提示词 / 说明；
+- 一键 **探测**（实时解析入口 + ping 远端 dsh-web-service）、**提示词预览**（脱敏）。
+
+设置页配色与布局统一走 DSH 平台设计令牌（`--dsw-alias-*`），浅/深主题一致；列表用卡片 +
+标签/值网格（不用横向表格），窄窗与移动端不再把长 URL / 路径挤成竖排。
 
 数据落盘 `~/.dsh/onenat-workbuddy-mention/store.json`；首次启动会**自动从旧版 `~/.dsh/onenat-workbuddy/store.json` 迁移** agents/settings。
 
