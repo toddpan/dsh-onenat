@@ -5,7 +5,7 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/toddpan/onenat-workbuddy.git"
+    "url": "https://github.com/toddpan/onenat-workbuddy-mention.git"
   },
   "keywords": [
     "deepseek-harness",
@@ -21,7 +21,9 @@
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
   "files": [
-    "lib"
+    "lib",
+    "cordis.patch.yml",
+    "skills"
   ],
   "license": "BSD-3-Clause",
   "peerDependencies": {
@@ -55,6 +57,12 @@
     "./package.json": "./package.json"
   },
   "dsh": {
+    "engines": {
+      "dsh": ">=0.1.5-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-runtime",
