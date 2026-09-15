@@ -56,6 +56,12 @@ export interface ResolvedEndpoint {
     /** tcp 隧道承载 HTTP 或 http 映射时合成的 web 入口（路径不变） */
     baseUrl?: string;
     kind: 'ssh' | 'dsh' | 'http' | 'tcp' | 'unknown';
+    /**
+     * 该映射是否设了实例级凭证覆盖（= /api/v1/resources 的 auth_override）。
+     * false/undefined ⇒ 该映射继承"应用级默认凭证"：一个应用被多条映射共用时，
+     * 这个凭证只对应用凭证所属的那台实例有效，对别的目标机可能无效。
+     */
+    authOverride?: boolean;
     appName?: string;
     appType?: string;
     appSkills?: Array<{
@@ -77,7 +83,10 @@ export interface OnenatCredentials {
     password?: string;
     apiKey?: string;
     token?: string;
+    /** 'mapping' = 该映射的实例独立凭证（权威）；'app' = 继承应用级默认凭证（共享，可能对目标机无效） */
     resolvedFrom?: string;
+    /** 本凭证的取数时刻（ms）：提示词里必须暴露，用于判断"派发快照是否已过期" */
+    fetchedAt?: number;
     error?: string;
 }
 export type SshAuthType = 'password' | 'key';

@@ -18,9 +18,21 @@ export declare class OnenatDirectory {
     private refreshPromise;
     private timer;
     private credCache;
+    /**
+     * 凭证缓存 TTL。**必须短**：映射实例凭证在 OneNat 后台改完后，本进程缓存最多
+     * 只会阻碍这么久（旧实现 10 分钟 ⇒ "设了独立凭证，注入的还是应用默认/旧密码"）。
+     * 同时它也是 OneNat 侧 5 次/分限速的保护：30s 内同映射最多取 2 次。
+     */
     private static CRED_TTL;
+    /** 失败（403/429）负缓存 TTL：只用来挡连环触发，绝不当成功凭证用 */
+    private static CRED_NEG_TTL;
     constructor(baseUrl: string, apiKey: string, log?: (msg: string) => void);
     configure(baseUrl: string, apiKey: string): void;
+    /**
+     * 让某映射（或全部）的凭证缓存立即失效。
+     * 调用时机：OneNat 侧改过实例凭证后、以及需要"派发必取最新值"的场合。
+     */
+    invalidateCredential(mappingId?: string): void;
     get configured(): boolean;
     get endpoint(): string;
     /** 平台 API Key（提示词 [平台接入] 段用；self-fetch 凭证策略需要） */
@@ -42,7 +54,10 @@ export declare class OnenatDirectory {
     /** 下载应用技能文件全文（url 已自带 key） */
     /**
      * 读取映射实例的有效凭证（映射覆盖优先，回退应用默认）。
-     * ONENAT 侧限速 5 次/分 ⇒ 本地缓存 10 分钟。
+     * ONENAT 侧限速 5 次/分 ⇒ 本地缓存，但**成功值与失败值分开计时**：
+     * 成功值 30s（保证刚改完凭证就派发也能取到新值），403/429 等失败 15s；
+     * 失败值永远不会被当成可用凭证。
+     * 返回值带 resolvedFrom（mapping=实例独立 / app=继承应用默认）与 fetchedAt。
      */
     fetchMappingCredentials(mappingId: string, force?: boolean): Promise<OnenatCredentials>;
     /** 对 DSH 端点探活：GET /system/status */
