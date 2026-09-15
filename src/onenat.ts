@@ -55,7 +55,14 @@ export class OnenatDirectory {
   private refreshPromise: Promise<ResourceSnapshot> | undefined
   private timer: ReturnType<typeof setInterval> | undefined
   private credCache = new Map<string, { at: number; data: OnenatCredentials }>()
-  private static CRED_TTL = 10 * 60 * 1000
+  /**
+   * 凭证缓存 TTL。**必须短**：映射实例凭证在 OneNat 后台改完后，本进程缓存最多
+   * 只会阻碍这么久（旧实现 10 分钟 ⇒ "设了独立凭证，注入的还是应用默认/旧密码"）。
+   * 同时它也是 OneNat 侧 5 次/分限速的保护：30s 内同映射最多取 2 次。
+   */
+  private static CRED_TTL = 30 * 1000
+  /** 失败（403/429）负缓存 TTL：只用来挡连环触发，绝不当成功凭证用 */
+  private static CRED_NEG_TTL = 15 * 1000
 
   constructor(
     private baseUrl: string,
@@ -67,6 +74,16 @@ export class OnenatDirectory {
     this.baseUrl = cleanBaseUrl(baseUrl || '')
     this.apiKey = apiKey || ''
     this.snapshot = undefined
+    this.credCache.clear()
+  }
+
+  /**
+   * 让某映射（或全部）的凭证缓存立即失效。
+   * 调用时机：OneNat 侧改过实例凭证后、以及需要"派发必取最新值"的场合。
+   */
+  public invalidateCredential(mappingId?: string): void {
+    if (mappingId) this.credCache.delete(mappingId)
+    else this.credCache.clear()
   }
 
   public get configured(): boolean {
@@ -183,6 +200,9 @@ export class OnenatDirectory {
       port: parsed?.port,
       local: String(m.local ?? ''),
       kind,
+      // 平台已给出"是否实例级覆盖"标志：接住它，合成时才能区分
+      // 实例独立凭证(mapping) 与 继承应用默认(app)；字段缺失时保持 undefined(未知)
+      authOverride: m.auth_override === undefined ? undefined : Boolean(m.auth_override),
       appName: uniqueName || rawAppName || `${t.name || 'node'}-${kind}`,
       appType: app?.type,
       appSkills: app?.skills,
@@ -230,11 +250,15 @@ export class OnenatDirectory {
   /** 下载应用技能文件全文（url 已自带 key） */
   /**
    * 读取映射实例的有效凭证（映射覆盖优先，回退应用默认）。
-   * ONENAT 侧限速 5 次/分 ⇒ 本地缓存 10 分钟。
+   * ONENAT 侧限速 5 次/分 ⇒ 本地缓存，但**成功值与失败值分开计时**：
+   * 成功值 30s（保证刚改完凭证就派发也能取到新值），403/429 等失败 15s；
+   * 失败值永远不会被当成可用凭证。
+   * 返回值带 resolvedFrom（mapping=实例独立 / app=继承应用默认）与 fetchedAt。
    */
   public async fetchMappingCredentials(mappingId: string, force = false): Promise<OnenatCredentials> {
     const cached = this.credCache.get(mappingId)
-    if (!force && cached && Date.now() - cached.at < OnenatDirectory.CRED_TTL) return cached.data
+    const ttl = cached?.data.ok ? OnenatDirectory.CRED_TTL : OnenatDirectory.CRED_NEG_TTL
+    if (!force && cached && Date.now() - cached.at < ttl) return cached.data
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/mappings/${encodeURIComponent(mappingId)}/credentials`, {
         headers: this.headers(),
@@ -242,8 +266,8 @@ export class OnenatDirectory {
       })
       const json: any = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const data: OnenatCredentials = { ok: false, error: json?.error || `HTTP ${res.status}` }
-        // 403/429 属策略性失败：也缓存一小会儿，避免连环触发限速
+        const data: OnenatCredentials = { ok: false, error: json?.error || `HTTP ${res.status}`, fetchedAt: Date.now() }
+        // 403/429 属策略性失败：只做短负缓存，避免连环触发限速
         if (res.status === 403 || res.status === 429) this.credCache.set(mappingId, { at: Date.now(), data })
         return data
       }
@@ -255,11 +279,12 @@ export class OnenatDirectory {
         apiKey: json?.api_key || json?.apiKey,
         token: json?.token,
         resolvedFrom: json?.resolved_from || json?.resolvedFrom,
+        fetchedAt: Date.now(),
       }
       this.credCache.set(mappingId, { at: Date.now(), data })
       return data
     } catch (err: any) {
-      return { ok: false, error: err?.message || '凭证读取失败' }
+      return { ok: false, error: err?.message || '凭证读取失败', fetchedAt: Date.now() }
     }
   }
 

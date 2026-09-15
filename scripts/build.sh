@@ -72,6 +72,23 @@ if [ -d "$CHECKOUT/apps/web/node_modules/@types/react-dom" ] && [ ! -e node_modu
   link_pkg @types/react-dom apps/web/node_modules/@types/react-dom
 fi
 
+# @types/react（react-dom 的类型依赖；缺它 tsc 会在 src/client/index.ts 报 TS2307）
+if [ ! -e node_modules/@types/react ]; then
+  for candidate in "$CHECKOUT/apps/web/node_modules/@types/react" "$CHECKOUT/node_modules/@types/react"; do
+    if [ -d "$candidate" ]; then
+      node -e "
+        const fs = require('fs');
+        const path = require('path');
+        fs.mkdirSync('node_modules/@types', { recursive: true });
+        fs.rmSync('node_modules/@types/react', { recursive: true, force: true });
+        fs.symlinkSync(path.resolve(process.argv[1]), path.resolve('node_modules/@types/react'), process.platform === 'win32' ? 'junction' : 'dir');
+      " "$candidate"
+      echo "=== @types/react linked from $candidate ==="
+      break
+    fi
+  done
+fi
+
 # ssh2（SSH 连接资源 test/exec 的运行时依赖；已声明在 package.json dependencies）
 # 构建期链接：优先 profile node_modules，其次 checkout node_modules；都没有则跳过（运行时降级 TCP 探测）
 if [ ! -e node_modules/ssh2 ]; then
