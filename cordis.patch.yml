@@ -1,7 +1,7 @@
-# onenat-workbuddy-mention bundle patch: inserts the dual-face plugin row into
+# dsh-onenat bundle patch: inserts the dual-face plugin row into
 # the web profile roster. Applied as a profile bundle layer (the
 # `dsh.bundle.patch` manifest field) over dsh-base; install with
-# `dsh plugin --profile web add https://github.com/toddpan/onenat-workbuddy-mention`
+# `dsh plugin --profile web add https://github.com/toddpan/dsh-onenat`
 # (or the npm spec once published).
 #
 # The row is a bare plugin by package name: the node half (exports ".") runs in
@@ -9,5 +9,5 @@
 # `dsh.client` declaration in package.json makes the browser half
 # (exports "./client") load in the web GUI（设置页 + @ 输入触发源 + 状态行）.
 - insert:
-    - id: onenat-workbuddy-mention
-      name: '@dsh-external/onenat-workbuddy-mention'
+    - id: dsh-onenat
+      name: '@dsh-external/dsh-onenat'

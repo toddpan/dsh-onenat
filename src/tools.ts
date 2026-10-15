@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy-mention - 模型工具
+ * @dsh-external/dsh-onenat - 模型工具
  *
  *  onenat_agent   —— 把任务派发给 ONENAT 上的子智能体（远端 DSH 会话，长持复用）
  *  onenat_manage  —— 子智能体 / ONENAT 资源 / 本地 SSH 资源池的管理面
@@ -29,6 +29,7 @@ import {
   testSshResource,
 } from './ssh-resources.js'
 import type { SubAgent } from './types.js'
+import { normalizeDshRefInput } from './store.js'
 
 /** jobs 服务的最小结构面（避免编译期依赖 @deepseek-ai/dsh-jobs 的导出名） */
 interface JobHooksLike {
@@ -137,7 +138,7 @@ function registerAgentTool(ctx: Context, deps: ToolDeps): void {
           },
         }),
       ),
-    'onenat-workbuddy-mention: onenat_agent tool',
+    'dsh-onenat: onenat_agent tool',
   )
 }
 
@@ -247,14 +248,19 @@ function registerManageTool(ctx: Context, deps: ToolDeps): void {
         defineTool({
           name: 'onenat_manage',
           description:
-            'OneNat WorkBuddy 管理面：子智能体（list/upsert/delete/ping/preview/models/presets/sessions/session-clear）、'
-            + 'ONENAT 资源目录（resources/resolve/refresh）、本地 SSH 资源池（ssh-list/ssh-get/ssh-upsert/ssh-delete/ssh-test/ssh-exec/skill）、'
+            'OneNat oneNat 管理面：子智能体（list/upsert/delete/ping/preview/models/presets/probe/sessions/session-clear）、'
+            + 'ONENAT 资源目录（resources/resolve/refresh/candidates/skills）、本地 SSH 资源池（ssh-list/ssh-get/ssh-upsert/ssh-delete/ssh-test/ssh-exec）、'
             + '设置（settings-get/settings-set）。'
-            + '用户在输入框用 @ 选中实体时由宿主自动注入上下文，本工具用于增删改查与连通性检查。',
+            + '用户在输入框用 @ 选中实体时由宿主自动注入上下文，本工具用于增删改查与连通性检查。'
+            + '用自然语言添加子智能体的标准流程：'
+            + '① resources 或 candidates 找到目标 ONENAT 映射/app，拿 mappingId；'
+            + '② probe {agent:{dshRef:mappingId}} 现场拉远端 models/presets（不落库，保存前即可选型）；'
+            + '③ upsert {agent:{name, dshRef:mappingId, agentPreset?, provider?, model?, permission?, workDir?, systemPrompt?, skills?, description?}} 保存（dshRef 直接填 mappingId 即可自动归一化；同名同实体自动复用更新，不会重复建）；'
+            + '④ ping {agentId} 验证入口连通；⑤ 把 @名称 告知用户。',
           parameters: {
             action: { type: 'string', description: '操作名（见工具描述）' },
-            agent: { type: 'json', description: '子智能体定义（upsert 用）: { id?, name, dshRef, apiKey?, agentPreset?, permission?, provider?, model?, workDir?, systemPrompt?, resources?, skills?, description?, enabled? }' },
-            agentId: { type: 'string', description: '子智能体 ID（delete/ping/preview/models/presets/session-clear 用；也接受名称）' },
+            agent: { type: 'json', description: '子智能体定义：upsert 传完整定义 { id?, name, dshRef, apiKey?, agentPreset?, permission?, provider?, model?, workDir?, systemPrompt?, resources?, skills?, description?, enabled? }；probe / 保存前的 models,presets,ping,preview 传草稿 { name?, dshRef, apiKey? }（不落库）' },
+            agentId: { type: 'string', description: '子智能体 ID（delete/ping/preview/models/presets/session-clear 用；也接受名称；留空且给了 agent 草稿时按草稿现场解析）' },
             resource: { type: 'json', description: 'SSH 资源定义（ssh-upsert 用）: { id?, name, host, port?, authType:"password"|"key", username, password?, privateKey?, passphrase?, description?, tags? }' },
             resourceId: { type: 'string', description: 'SSH 资源 ID 或名称（ssh-get/ssh-delete/ssh-test/ssh-exec 用）' },
             mappingId: { type: 'string', description: 'ONENAT 映射 ID（resolve 用）' },
@@ -271,10 +277,11 @@ function registerManageTool(ctx: Context, deps: ToolDeps): void {
                 case 'list': return json(listAgents(deps))
                 case 'upsert': return json(upsertAgent(deps, args?.agent))
                 case 'delete': return json({ ok: deps.store.deleteAgent(resolveAgentId(deps, args?.agentId)) })
-                case 'ping': return json(await pingAgent(deps, args?.agentId))
-                case 'preview': return json(await previewAgent(deps, args?.agentId))
-                case 'models': return json(await remoteCatalog(deps, args?.agentId, 'models'))
-                case 'presets': return json(await remoteCatalog(deps, args?.agentId, 'presets'))
+                case 'ping': return json(await pingAgent(deps, args?.agentId, args?.agent))
+                case 'preview': return json(await previewAgent(deps, args?.agentId, args?.agent))
+                case 'models': return json(await remoteCatalog(deps, args?.agentId, 'models', args?.agent))
+                case 'presets': return json(await remoteCatalog(deps, args?.agentId, 'presets', args?.agent))
+                case 'probe': return json(await probeTarget(deps, args?.agent))
                 case 'sessions': return json({ ok: true, sessions: deps.store.listSessions() })
                 case 'session-clear': {
                   const agentId = resolveAgentId(deps, args?.agentId)
@@ -301,7 +308,7 @@ function registerManageTool(ctx: Context, deps: ToolDeps): void {
           },
         }),
       ),
-    'onenat-workbuddy-mention: onenat_manage tool',
+    'dsh-onenat: onenat_manage tool',
   )
 }
 
@@ -309,6 +316,39 @@ function resolveAgentId(deps: ToolDeps, key: unknown): string {
   const raw = String(key || '').trim()
   if (!raw) return ''
   return deps.store.findAgent(raw)?.id || raw
+}
+
+/**
+ * 由「未落库的定义」合成探测用草稿 —— settings 页 /api/probe/* 的工具面等价物。
+ * 让模型在保存之前就能解析入口、拉远端 models/presets：dshRef 直接填 ONENAT
+ * mappingId（裸字符串自动归一化为 {kind:'mapping'}）。
+ */
+function draftAgent(input: unknown): SubAgent | undefined {
+  let raw: any = input
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw) } catch { return undefined }
+  }
+  if (!raw || typeof raw !== 'object') return undefined
+  const dshRef = normalizeDshRefInput(raw.dshRef)
+  if (!dshRef) return undefined
+  return {
+    id: '__probe__',
+    name: String(raw.name || '__probe__'),
+    dshRef,
+    apiKey: raw.apiKey && String(raw.apiKey).trim() ? String(raw.apiKey).trim() : undefined,
+    resources: [],
+    enabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+  }
+}
+
+/** ping/preview/models/presets 共用的取参逻辑：优先已保存实体，否则用草稿现场解析。 */
+function pickAgent(deps: ToolDeps, key: unknown, draft: unknown): SubAgent | undefined {
+  const saved = deps.store.findAgent(String(key || ''))
+  if (saved) return saved
+  if (key && !draft) return undefined // 给了 agentId 但查不到 → 明确报不存在
+  return draftAgent(draft)
 }
 
 function listAgents(deps: ToolDeps): unknown {
@@ -335,35 +375,70 @@ function upsertAgent(deps: ToolDeps, input: unknown): unknown {
   const agent = typeof input === 'string' ? JSON.parse(input) : input
   if (!agent || typeof agent !== 'object') return { ok: false, error: '缺少 agent 定义' }
   if (!(agent as any).name) return { ok: false, error: '缺少 name' }
-  const saved = deps.store.upsertAgent(agent as Partial<SubAgent>)
+  // 兼容裸字符串 dshRef（从 onenat_resource list 拷过来的 mappingId），
+  // 以及任意形态 — 先归一化再落库，否则 resolver.resolve 找不到 mapping/app。
+  // 归一化失败（非法形态）则移除该字段，让 store.upsertAgent 走「复用旧值」兜底。
+  // 注意：工具入参可能是冻结对象（PTC 通道），必须浅拷贝后改写，不能原地赋值。
+  const patch: Record<string, unknown> = { ...(agent as Record<string, unknown>) }
+  if ('dshRef' in patch) {
+    const norm = normalizeDshRefInput(patch.dshRef)
+    if (norm) patch.dshRef = norm
+    else delete patch.dshRef
+  }
+  const saved = deps.store.upsertAgent(patch as Partial<SubAgent>)
   return { ok: true, agent: saved }
 }
 
-async function pingAgent(deps: ToolDeps, key: unknown): Promise<unknown> {
-  const agent = deps.store.findAgent(String(key || ''))
-  if (!agent) return { ok: false, error: '子智能体不存在' }
+async function pingAgent(deps: ToolDeps, key: unknown, draft?: unknown): Promise<unknown> {
+  const agent = pickAgent(deps, key, draft)
+  if (!agent) return { ok: false, error: '子智能体不存在（也未提供可解析的 agent 草稿）' }
   const { target, ping } = await deps.resolver.resolveWithPing(agent)
-  return { ok: Boolean(ping?.ok), agent: agent.name, resolvedEntry: target?.baseUrl, ping }
+  return { ok: Boolean(ping?.ok), agent: agent.name, saved: agent.id !== '__probe__', resolvedEntry: target?.baseUrl, ping }
 }
 
-async function previewAgent(deps: ToolDeps, key: unknown): Promise<unknown> {
-  const agent = deps.store.findAgent(String(key || ''))
-  if (!agent) return { ok: false, error: '子智能体不存在' }
+async function previewAgent(deps: ToolDeps, key: unknown, draft?: unknown): Promise<unknown> {
+  const agent = pickAgent(deps, key, draft)
+  if (!agent) return { ok: false, error: '子智能体不存在（也未提供可解析的 agent 草稿）' }
   await deps.directory.refresh(true).catch(() => {})
   const { prompt, warnings } = await deps.runner.composePrompt(agent, '<任务正文将放在这里>', [], {
     permission: agent.permission,
   })
-  return { ok: true, agent: agent.name, prompt, warnings }
+  return { ok: true, agent: agent.name, saved: agent.id !== '__probe__', prompt, warnings }
 }
 
-async function remoteCatalog(deps: ToolDeps, key: unknown, kind: 'models' | 'presets'): Promise<unknown> {
-  const agent = deps.store.findAgent(String(key || ''))
-  if (!agent) return { ok: false, error: '子智能体不存在' }
+async function remoteCatalog(deps: ToolDeps, key: unknown, kind: 'models' | 'presets', draft?: unknown): Promise<unknown> {
+  const agent = pickAgent(deps, key, draft)
+  if (!agent) return { ok: false, error: '子智能体不存在（也未提供可解析的 agent 草稿）' }
   const target = await deps.resolver.resolve(agent)
   if (!target.online || !target.baseUrl) return { ok: false, error: target.error || '入口解析失败' }
   const client = new DshClient()
   const result = kind === 'models' ? await client.getModels(target) : await client.getPresets(target)
   return { ...result, ok: result.ok, target: target.baseUrl }
+}
+
+/** 保存前的现场探测：一次拉远端 models + presets（settings 页 /api/probe/options 的工具面等价）。 */
+async function probeTarget(deps: ToolDeps, input: unknown): Promise<unknown> {
+  const draft = draftAgent(input)
+  if (!draft) return { ok: false, error: 'probe 需要 agent 草稿（至少含有效 dshRef，可直接填 ONENAT mappingId）' }
+  const target = await deps.resolver.resolve(draft)
+  if (!target.online || !target.baseUrl) return { ok: false, error: target.error || '入口解析失败' }
+  const client = new DshClient()
+  const [models, presets] = await Promise.all([client.getModels(target), client.getPresets(target)])
+  const providers: string[] = []
+  for (const m of models.models || []) {
+    if (m.provider && !providers.includes(m.provider)) providers.push(m.provider)
+  }
+  return {
+    ok: true,
+    target: target.baseUrl,
+    dshRef: draft.dshRef,
+    models: models.models || [],
+    providers,
+    presets: presets.presets || [],
+    defaultModel: models.defaultModel,
+    modelsError: models.ok ? undefined : models.error,
+    presetsError: presets.ok ? undefined : presets.error,
+  }
 }
 
 async function listResources(deps: ToolDeps, force: boolean): Promise<unknown> {
@@ -490,7 +565,7 @@ function registerResourceTool(ctx: Context, deps: ToolDeps): void {
           },
         }),
       ),
-    'onenat-workbuddy-mention: onenat_resource tool',
+    'dsh-onenat: onenat_resource tool',
   )
 }
 
@@ -529,7 +604,7 @@ function registerSshExecTool(ctx: Context, deps: ToolDeps): void {
           },
         }),
       ),
-    'onenat-workbuddy-mention: onenat_ssh tool',
+    'dsh-onenat: onenat_ssh tool',
   )
 }
 

@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy-mention - @ 资源提及 → 资源绑定
+ * @dsh-external/dsh-onenat - @ 资源提及 → 资源绑定
  *
  * 两类被 @ 的资源：
  *   - ONENAT 映射 / 应用（稳定 ID = mappingId / appId）→ 交给 PromptComposer 实时解析入口，

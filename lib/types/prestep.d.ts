@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy-mention - agent/pre-step 注入
+ * @dsh-external/dsh-onenat - agent/pre-step 注入
  *
  * 用户发出 `@子智能体` / `@资源` 后，本监听器在进入模型步之前：
  *   1. 把消息里的提及解析回结构化身份（MentionParser）；
@@ -26,7 +26,7 @@ import type { WorkStore } from './store.js';
  * 旧 v3 会话里的 plugin 来源行由宿主迁移为 `plugin:<包名>`，与本 kind 并存可读。
  */
 export interface OnenatMentionSource {
-    kind: 'onenat-workbuddy-mention';
+    kind: 'dsh-onenat';
     form: 'snapshot';
     sections: readonly {
         name: string;
@@ -35,7 +35,7 @@ export interface OnenatMentionSource {
 }
 declare module '@deepseek-ai/dsh-llm' {
     interface MessageSourceMap {
-        'onenat-workbuddy-mention': OnenatMentionSource;
+        'dsh-onenat': OnenatMentionSource;
     }
 }
 export interface PreStepDeps {

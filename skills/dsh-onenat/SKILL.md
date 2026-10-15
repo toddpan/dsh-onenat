@@ -1,9 +1,9 @@
 ---
-name: onenat-workbuddy-mention
-description: 在 DSH 原生输入框用 @ 指定 ONENAT 上的子智能体与资源（子智能体管理 / 子智能调用 / 资源提示词注入）。当用户提到 @子智能体、ONENAT 子智能体、把任务交给某个远端智能体、ONENAT 资源（SSH/DSH/HTTP）、WorkBuddy @ 时使用。
+name: dsh-onenat
+description: 在 DSH 原生输入框用 @ 指定 ONENAT 上的子智能体与资源（子智能体管理 / 子智能调用 / 资源提示词注入）。当用户提到 @子智能体、ONENAT 子智能体、把任务交给某个远端智能体、ONENAT 资源（SSH/DSH/HTTP）、oneNat @ 时使用。
 ---
 
-# OneNat WorkBuddy @
+# OneNat oneNat @
 
 把 ONENAT 资源面上的**子智能体**与**资源**接进 DSH 原生对话。
 
@@ -39,8 +39,8 @@ onenat_ssh {action:"exec", resource:"<名称>", command:"…"}                  
 
 ## 管理（设置页）
 
-DSH Web GUI → 设置 → **WorkBuddy @**：
+DSH Web GUI → 设置 → **oneNat @**：
 ① ONENAT 连接与派发默认值 ② 资源目录 ③ 子智能体管理（增删改查 / 探测 / 提示词预览）
 ④ 本地 SSH 资源池 ⑤ 提及解析自检。
 
-管理 API 前缀 `/onenat-workbuddy-mention`（同源）：`/api/agents`、`/api/resources`、`/api/candidates`、`/api/ssh`。
+管理 API 前缀 `/dsh-onenat`（同源）：`/api/agents`、`/api/resources`、`/api/candidates`、`/api/ssh`。

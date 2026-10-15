@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy-mention - 单次远端派发执行器
+ * @dsh-external/dsh-onenat - 单次远端派发执行器
  *
  * 一次派发 = 一个「自包含任务」交给某个 ONENAT 子智能体：
  *   1. 解析：AgentResolver 强刷 ONENAT → 当下 baseUrl（D1 端口漂移免疫）
@@ -115,7 +115,7 @@ export class AgentRunner {
     if (agent.systemPrompt?.trim()) parts.push('[角色与职责]', agent.systemPrompt.trim(), '')
     if (composed.block) parts.push(composed.block, '')
     for (const item of ctx.preRendered || []) parts.push(item.markdown, '')
-    parts.push('[由 OneNat WorkBuddy 派发的任务]')
+    parts.push('[由 OneNat oneNat 派发的任务]')
     parts.push(`- 执行方：${agent.name}（远端 DSH 节点上的独立会话，拥有自己的文件/命令/网络工具）`)
     if (ctx.permission) parts.push(`- 运行权限：${ctx.permission}`)
     if (agent.workDir) parts.push(`- 工作目录：${agent.workDir}（相对路径一律以此为根）`)
@@ -165,7 +165,7 @@ export class AgentRunner {
     let sessionReused = Boolean(binding?.remoteSessionId)
     let remoteSessionId = binding?.remoteSessionId
     if (!remoteSessionId) {
-      const created = await this.client.createSession(target, `WorkBuddy · ${agent.name}`, {
+      const created = await this.client.createSession(target, `oneNat · ${agent.name}`, {
         agentPreset: agent.agentPreset || 'cordis',
         provider: agent.provider,
         model: agent.model,

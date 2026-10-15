@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy-mention - agent/pre-step 注入
+ * @dsh-external/dsh-onenat - agent/pre-step 注入
  *
  * 用户发出 `@子智能体` / `@资源` 后，本监听器在进入模型步之前：
  *   1. 把消息里的提及解析回结构化身份（MentionParser）；
@@ -30,14 +30,14 @@ import type { WorkStore } from './store.js'
  * 旧 v3 会话里的 plugin 来源行由宿主迁移为 `plugin:<包名>`，与本 kind 并存可读。
  */
 export interface OnenatMentionSource {
-  kind: 'onenat-workbuddy-mention'
+  kind: 'dsh-onenat'
   form: 'snapshot'
   sections: readonly { name: string; text: string }[]
 }
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    'onenat-workbuddy-mention': OnenatMentionSource
+    'dsh-onenat': OnenatMentionSource
   }
 }
 
@@ -61,7 +61,7 @@ function textOf(message: UserMessage): string {
 function pluginMessage(name: string, text: string): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text }],
-    source: { kind: 'onenat-workbuddy-mention', form: 'snapshot', sections: [{ name, text }] },
+    source: { kind: 'dsh-onenat', form: 'snapshot', sections: [{ name, text }] },
   })
 }
 
@@ -84,7 +84,7 @@ export function registerPreStep(ctx: Context, deps: PreStepDeps, log: (msg: stri
           return decision
         }
       }, { prepend: true }),
-    'onenat-workbuddy-mention: pre-step mention injection',
+    'dsh-onenat: pre-step mention injection',
   )
 }
 
@@ -123,7 +123,7 @@ function renderAgentDirective(
   mentions: Array<{ id: string; label: string }>,
   store: WorkStore,
 ): string {
-  const lines: string[] = ['[OneNat WorkBuddy] 用户在本次消息中用 @ 指定了子智能体，请按下列指认派发：', '']
+  const lines: string[] = ['[OneNat oneNat] 用户在本次消息中用 @ 指定了子智能体，请按下列指认派发：', '']
   for (const mention of mentions) {
     const sub = store.getAgent(mention.id)
     if (!sub) {
@@ -172,7 +172,7 @@ async function renderResourceBlock(ids: string[], deps: PreStepDeps): Promise<st
   for (const item of resolved.preRendered) sections.push(item.markdown)
   if (sections.length === 0 && composed.warnings.length === 0 && resolved.missing.length === 0) return ''
 
-  const lines: string[] = ['[OneNat WorkBuddy] 用户在本次消息中用 @ 指定了下列资源，本轮可以使用它们：', '']
+  const lines: string[] = ['[OneNat oneNat] 用户在本次消息中用 @ 指定了下列资源，本轮可以使用它们：', '']
   lines.push(sections.join('\n\n'))
 
   const problems = [...resolved.missing.map((m) => `${m} 已不存在`), ...composed.warnings]

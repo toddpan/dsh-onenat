@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy-mention - @ 提及编解码与解析
+ * @dsh-external/dsh-onenat - @ 提及编解码与解析
  *
  * 一个提及（mention）在两处出现：
  *   1. 输入框胶囊 → 提交时由客户端 codec 序列化为 `@[展示名](onenat-agent:<id>)`；

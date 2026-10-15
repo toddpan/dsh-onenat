@@ -1,7 +1,7 @@
 /**
- * @dsh-external/onenat-workbuddy-mention - 数据模型
+ * @dsh-external/dsh-onenat - 数据模型
  *
- * 与 0.1.x（onenat-workbuddy 控制台版）的差别：
+ * 与 0.1.x（dsh-onenat 控制台版）的差别：
  *  - 删除 Task / Plan / Turn / 编排引擎相关类型（不再自建聊天会话与 DAG 编排）
  *  - 新增 @ 提及（mention）类型：URI 编解码、候选行、解析结果
  *  - 新增 (DSH 会话, 子智能体) → 远端会话 的长持映射（替代原 (任务, 成员) 语义）
@@ -243,7 +243,7 @@ export interface RemoteSessionBinding {
     /** 归属的本地 DSH 会话（用于隔离不同对话的子智能体会话；空 = 全局共享） */
     scope?: string;
 }
-export interface WorkBuddySettings {
+export interface oneNatSettings {
     onenat: {
         baseUrl: string;
         apiKey: string;
@@ -261,7 +261,7 @@ export interface StorageData {
     agents: SubAgent[];
     /** `${scope}::${agentId}` → binding */
     sessions: Record<string, RemoteSessionBinding>;
-    settings: WorkBuddySettings;
+    settings: oneNatSettings;
 }
 export interface PluginConfig {
     pathPrefix?: string;

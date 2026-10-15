@@ -1,8 +1,8 @@
 /**
- * @dsh-external/onenat-workbuddy - 资源提示词合成引擎（D2 资源即提示词）
+ * @dsh-external/dsh-onenat - 资源提示词合成引擎（D2 资源即提示词）
  *
  * 派发子任务时合成结构化提示词块，注入子智能体上下文。技能装载语义（方案 B：
- * 信任远端 DSH 原生技能体系，workbuddy 不搬运正文）：
+ * 信任远端 DSH 原生技能体系，oneNat 不搬运正文）：
  *  - 子智能体绑定的技能：均为目标节点已安装技能 → 提示词写入空白符边界的
  *    /name 手势，由远端宿主 tool-skill pre-step 原生加载技能正文（与 DSH web
  *    用户手输 /技能名 同一路径），不内联全文；

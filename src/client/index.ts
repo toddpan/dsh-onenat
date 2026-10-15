@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy-mention — DSH Web GUI 集成
+ * @dsh-external/dsh-onenat — DSH Web GUI 集成
  *
  * 只有两件事，都在 DSH 原生界面里：
  *   1. `@` 输入触发源（ctx.inputTriggers）：候选 = ONENAT 子智能体 + ONENAT 资源 + 本地 SSH 资源；
@@ -49,7 +49,7 @@ function insertStyles(css: string): () => void {
 }
 declare const console: { log(...v: unknown[]): void; error(...v: unknown[]): void }
 
-const NS = 'onenat-workbuddy-mention'
+const NS = 'dsh-onenat'
 
 /**
  * `@` 源注册状态：模块级快照 + 订阅。
@@ -91,8 +91,8 @@ const STATUS = {
  * 管理 API 前缀：由 Host 注入到 index.html（插件为普通 bundle，浏览器半边走同源 HTTP）。
  */
 function apiPrefix(): string {
-  const injected = (globalThis as any).__DSH_ONENAT_WORKBUDDY__
-  const prefix = injected && typeof injected.pathPrefix === 'string' ? injected.pathPrefix : '/onenat-workbuddy-mention'
+  const injected = (globalThis as any).__DSH_ONENAT_oneNat__
+  const prefix = injected && typeof injected.pathPrefix === 'string' ? injected.pathPrefix : '/dsh-onenat'
   return String(prefix).replace(/\/+$/, '')
 }
 
@@ -344,6 +344,29 @@ const CSS = `
 .onm-chip:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
 .onm-chip.on { background: var(--dsw-alias-state-business-primary, #4176e6); border-color:transparent;
   color: var(--dsw-alias-label-primary-foreground, #fff); }
+/* 总览 / 搜索 / 健康状态 */
+.onm-hero { display:flex; flex-direction:column; gap:10px; }
+.onm-stats { display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:8px; }
+.onm-stat { padding:9px 12px; border-radius:10px; cursor:default;
+  background: var(--dsw-alias-bg-layer-1, transparent);
+  border:1px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12)); }
+.onm-stat .v { font-size:18px; font-weight:600; line-height:1.2; }
+.onm-stat .k { font-size:11.5px; color: var(--dsw-alias-label-secondary, #4b5563); }
+.onm-stat .v small { font-size:12px; font-weight:400; color: var(--dsw-alias-label-tertiary, #6b7280); }
+.onm-tips { margin:0; padding-left:18px; display:flex; flex-direction:column; gap:3px; }
+.onm-search { max-width:260px; }
+.onm-item-desc { font-size:12px; color: var(--dsw-alias-label-secondary, #4b5563); margin-top:-2px; }
+.onm-item.is-off { opacity:.62; }
+.onm-health { display:inline-flex; align-items:center; gap:5px; font-size:11px; color: var(--dsw-alias-label-secondary, #4b5563); }
+.onm-health .dot { width:7px; height:7px; border-radius:50%; background: var(--dsw-alias-label-tertiary, #9ca3af); }
+.onm-health.ok .dot { background: var(--dsw-alias-state-success-primary, #16a34a); }
+.onm-health.err .dot { background: var(--dsw-alias-state-error-primary, #dc2626); }
+.onm-health.checking .dot { animation: onm-pulse 1s ease-in-out infinite; }
+@keyframes onm-pulse { 0%,100% { opacity:.25 } 50% { opacity:1 } }
+@media (prefers-reduced-motion: reduce) { .onm-health.checking .dot { animation:none; } }
+.onm-linkbtn { font:inherit; font-size:11.5px; background:none; border:none; padding:0; cursor:pointer;
+  color: var(--dsw-alias-state-business-primary, #4176e6); }
+.onm-linkbtn:hover { text-decoration:underline; }
 @media (max-width:560px) {
   .onm-overlay { padding:0; align-items:stretch; }
   .onm-modal { max-width:none; max-height:none; height:100%; border-radius:0; border:none; }
@@ -388,7 +411,6 @@ const consoleApi = {
   probeMkdir: (body: unknown) => api('/api/probe/mkdir', { method: 'POST', body }),
   resources: (refresh: boolean) => api(`/api/resources${refresh ? '?refresh=1' : ''}`),
   candidates: (query: string) => api(`/api/candidates?q=${encodeURIComponent(query)}`),
-  parse: (text: string) => api('/api/debug/parse', { method: 'POST', body: { text } }),
   sshList: () => api('/api/ssh'),
   sshSave: (resource: unknown) => api('/api/ssh', { method: 'POST', body: resource }),
   sshDelete: (id: string) => api(`/api/ssh/${encodeURIComponent(id)}`, { method: 'DELETE' }),
@@ -417,8 +439,11 @@ function TextInput(props: {
   mono?: boolean
   inputMode?: string
   onEnter?: () => void
+  type?: string
 }) {
   return React.createElement('input', {
+    type: props.type || 'text',
+    autoComplete: props.type === 'password' ? 'off' : undefined,
     className: 'onm-input' + (props.mono ? ' onm-mono' : ''),
     value: props.value,
     placeholder: props.placeholder,
@@ -480,7 +505,28 @@ function Tag(props: { tone?: 'ok' | 'off' | 'warn' | 'brand'; children?: React.R
 }
 
 function Banner(props: { kind: Message['kind']; text: string }) {
-  return React.createElement('div', { className: 'onm-banner ' + props.kind }, props.text)
+  return React.createElement('div', { className: 'onm-banner ' + props.kind, role: props.kind === 'err' ? 'alert' : 'status' }, props.text)
+}
+
+/** 成功提示 5 秒后自动消失；错误提示保留到用户下一步操作 */
+function useAutoDismiss(message: Message | undefined, clear: () => void): void {
+  React.useEffect(() => {
+    if (!message || message.kind === 'err') return
+    const t = setTimeout(clear, 5000)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [message])
+}
+
+function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text)
+  const ta = document.createElement('textarea')
+  ta.value = text
+  document.body.appendChild(ta)
+  ta.select()
+  document.execCommand('copy')
+  ta.remove()
+  return Promise.resolve()
 }
 
 /** 标签 / 值两列网格：长路径只在值列内断行，不会把相邻列挤成竖排 */
@@ -490,6 +536,22 @@ function MetaRow(props: { label: string; children?: React.ReactNode }) {
 
 /** 通用浮层（createPortal 到 body） */
 function Overlay(props: { title: string; subtitle?: string; onClose: () => void; children?: React.ReactNode; footer?: React.ReactNode; top?: boolean }) {
+  // Esc 关闭（最上层浮层优先：on-top 的目录选择器先吃掉事件）
+  const onCloseRef = React.useRef(props.onClose)
+  onCloseRef.current = props.onClose
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      const layers = document.querySelectorAll('.onm-overlay')
+      const topLayer = layers[layers.length - 1]
+      if (props.top || layers.length <= 1 || !topLayer?.classList.contains('on-top')) {
+        e.stopPropagation()
+        onCloseRef.current()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [props.top])
   return createPortal(
     React.createElement(
       'div',
@@ -1116,47 +1178,84 @@ function AgentEditor(props: { agent: any; endpoints: any[]; onClose: () => void;
 
 // ------------------------------------------------------------------ 子智能体
 
-function AgentCard(props: { agents: any[]; endpoints: any[]; onChanged: () => void }) {
+type Health = { state: 'checking' | 'ok' | 'error'; ms?: number; entry?: string; error?: string }
+
+function AgentCard(props: { agents: any[]; endpoints: any[]; onChanged: () => void; health: Record<string, Health>; onCheck: (agent: any) => void }) {
   const [editing, setEditing] = React.useState<any>(undefined)
   const [message, setMessage] = React.useState<Message | undefined>(undefined)
   const [detail, setDetail] = React.useState<string | undefined>(undefined)
   const [confirmId, setConfirmId] = React.useState<string | undefined>(undefined)
+  const [query, setQuery] = React.useState('')
+  useAutoDismiss(message, () => setMessage(undefined))
 
-  const ping = (agent: any): void => {
-    setDetail(`[${agent.name}] 探测中…`)
-    consoleApi
-      .agentsPing(agent.id)
-      .then((data: any) => setDetail(`[${agent.name}] 解析入口 ${data?.resolved?.baseUrl || '-'}\n` + JSON.stringify(data?.ping, null, 2)))
-      .catch((err: any) => setDetail(String(err?.message || err)))
-  }
+  // 删除确认 4 秒内有效，超时自动复位，避免误删
+  React.useEffect(() => {
+    if (!confirmId) return
+    const t = setTimeout(() => setConfirmId(undefined), 4000)
+    return () => clearTimeout(t)
+  }, [confirmId])
+
   const preview = (agent: any): void => {
-    setDetail(`[${agent.name}] 生成中…`)
+    setDetail('[' + agent.name + '] 生成中…')
     consoleApi
       .agentsPreview(agent.id)
-      .then((data: any) => setDetail(`[${agent.name}] 派发提示词预览（脱敏）\n\n${data?.prompt || ''}`))
+      .then((data: any) => setDetail('[' + agent.name + '] 派发提示词预览（脱敏）\n\n' + (data?.prompt || '')))
       .catch((err: any) => setDetail(String(err?.message || err)))
   }
   const remove = (agent: any): void => {
     if (confirmId !== agent.id) {
       setConfirmId(agent.id)
-      setMessage({ kind: 'err', text: `再次点击「删除」确认删除子智能体「${agent.name}」` })
       return
     }
     consoleApi
       .agentsDelete(agent.id)
       .then(() => {
         setConfirmId(undefined)
-        setMessage({ kind: 'ok', text: `已删除「${agent.name}」` })
+        setMessage({ kind: 'ok', text: '已删除「' + agent.name + '」' })
         props.onChanged()
       })
       .catch((err: any) => setMessage({ kind: 'err', text: String(err?.message || err) }))
   }
+  const toggle = (agent: any): void => {
+    const enabled = agent.enabled === false
+    consoleApi
+      .agentsSave({ ...agent, enabled })
+      .then(() => {
+        setMessage({ kind: 'ok', text: (enabled ? '已启用' : '已停用') + '「' + agent.name + '」' })
+        props.onChanged()
+      })
+      .catch((err: any) => setMessage({ kind: 'err', text: String(err?.message || err) }))
+  }
+  const copyMention = (agent: any): void => {
+    copyText('@' + agent.name)
+      .then(() => setMessage({ kind: 'ok', text: '已复制 @' + agent.name + '，粘贴到输入框即可指名派发' }))
+      .catch(() => setMessage({ kind: 'err', text: '复制失败，请手动输入 @' + agent.name }))
+  }
 
+  const endpointName = (ref: any): string | undefined => {
+    const id = ref?.kind === 'app' ? ref.appId : ref?.mappingId
+    const ep = props.endpoints.find((e: any) => e.mappingId === id || e.appId === id)
+    return ep ? ep.appName || ep.note || undefined : undefined
+  }
   const refLabel = (agent: any): string => {
     const ref = agent.dshRef || {}
     if (ref.kind === 'direct') return ref.apiBaseUrl
-    if (ref.kind === 'app') return `应用 ${ref.appId}`
-    return `映射 ${ref.mappingId}`
+    const name = endpointName(ref)
+    const id = ref.kind === 'app' ? '应用 ' + ref.appId : '映射 ' + ref.mappingId
+    return name ? name + '（' + id + '）' : id
+  }
+
+  const q = query.trim().toLowerCase()
+  const visible = q
+    ? props.agents.filter((a) => [a.name, a.description, a.model, a.provider, refLabel(a)].some((s) => String(s || '').toLowerCase().includes(q)))
+    : props.agents
+
+  const healthView = (agent: any) => {
+    const h = props.health[agent.id]
+    if (!h) return React.createElement('span', { className: 'onm-health', title: '尚未探测' }, React.createElement('span', { className: 'dot' }), '未探测')
+    if (h.state === 'checking') return React.createElement('span', { className: 'onm-health checking' }, React.createElement('span', { className: 'dot' }), '探测中')
+    if (h.state === 'ok') return React.createElement('span', { className: 'onm-health ok', title: h.entry || '' }, React.createElement('span', { className: 'dot' }), '在线' + (h.ms !== undefined ? ' · ' + h.ms + 'ms' : ''))
+    return React.createElement('span', { className: 'onm-health err', title: h.error || '' }, React.createElement('span', { className: 'dot' }), '不可达')
   }
 
   return React.createElement(
@@ -1167,6 +1266,12 @@ function AgentCard(props: { agents: any[]; endpoints: any[]; onChanged: () => vo
       { className: 'onm-card-head' },
       React.createElement('h3', { className: 'onm-card-title' }, '子智能体', React.createElement(Tag, { tone: 'brand' }, String(props.agents.length))),
       React.createElement('div', { className: 'onm-spacer' }),
+      props.agents.length > 3
+        ? React.createElement('div', { className: 'onm-search' }, React.createElement(TextInput, { value: query, onChange: setQuery, placeholder: '搜索名称 / 描述 / 模型…' }))
+        : null,
+      props.agents.length > 0
+        ? React.createElement(Btn, { size: 'sm', onClick: () => props.agents.forEach((a) => props.onCheck(a)), title: '逐个探测所有子智能体的远端入口' }, '全部探测')
+        : null,
       React.createElement(Btn, { variant: 'primary', size: 'sm', onClick: () => setEditing(null) }, '＋ 新增'),
     ),
     React.createElement(
@@ -1177,53 +1282,68 @@ function AgentCard(props: { agents: any[]; endpoints: any[]; onChanged: () => vo
     message ? React.createElement('div', { style: { marginTop: 8 } }, React.createElement(Banner, { kind: message.kind, text: message.text })) : null,
 
     props.agents.length === 0
-      ? React.createElement('div', { className: 'onm-muted', style: { marginTop: 8 } }, '还没有子智能体，点右上角「新增」创建一个。')
-      : React.createElement(
+      ? React.createElement(
           'div',
-          { className: 'onm-list' },
-          props.agents.map((agent) =>
-            React.createElement(
-              'div',
-              { key: agent.id, className: 'onm-item' },
+          { className: 'onm-empty' },
+          React.createElement('div', null, '还没有子智能体。'),
+          React.createElement('div', { style: { marginTop: 4 } }, '点「＋ 新增」填表创建，或直接在聊天框说「帮我添加一个绑定 XX 的子智能体」。'),
+        )
+      : visible.length === 0
+        ? React.createElement('div', { className: 'onm-empty' }, '没有匹配「' + query + '」的子智能体')
+        : React.createElement(
+            'div',
+            { className: 'onm-list' },
+            visible.map((agent) =>
               React.createElement(
                 'div',
-                { className: 'onm-item-head' },
-                React.createElement('span', { className: 'onm-item-title' }, '@' + agent.name),
-                agent.enabled === false ? React.createElement(Tag, { tone: 'off' }, '已停用') : React.createElement(Tag, { tone: 'ok' }, '启用'),
-                React.createElement('div', { className: 'onm-spacer' }),
-                React.createElement(Tag, null, agent.model ? `${agent.provider ? agent.provider + ' / ' : ''}${agent.model}` : '远端默认模型'),
-              ),
-              React.createElement(
-                'dl',
-                { className: 'onm-meta' },
-                React.createElement(MetaRow, { label: '绑定', children: React.createElement('span', { className: 'onm-mono' }, refLabel(agent)) }),
-                React.createElement(MetaRow, { label: '模式', children: agent.agentPreset || 'cordis' }),
-                React.createElement(MetaRow, { label: '工作目录', children: React.createElement('span', { className: 'onm-mono' }, agent.workDir || '远端默认') }),
-                React.createElement(MetaRow, { label: '技能/资源', children: `${(agent.skills || []).length} 技能 · ${(agent.resources || []).length} 资源` }),
-              ),
-              React.createElement(
-                'div',
-                { className: 'onm-actions' },
-                React.createElement(Btn, { size: 'sm', onClick: () => setEditing(agent) }, '编辑'),
-                React.createElement(Btn, { size: 'sm', onClick: () => ping(agent) }, '探测'),
-                React.createElement(Btn, { size: 'sm', onClick: () => preview(agent) }, '提示词'),
+                { key: agent.id, className: 'onm-item' + (agent.enabled === false ? ' is-off' : '') },
                 React.createElement(
-                  Btn,
-                  { size: 'sm', variant: 'danger', onClick: () => remove(agent) },
-                  confirmId === agent.id ? '确认删除' : '删除',
+                  'div',
+                  { className: 'onm-item-head' },
+                  React.createElement('span', { className: 'onm-item-title' }, '@' + agent.name),
+                  agent.enabled === false ? React.createElement(Tag, { tone: 'off' }, '已停用') : React.createElement(Tag, { tone: 'ok' }, '启用'),
+                  healthView(agent),
+                  React.createElement('div', { className: 'onm-spacer' }),
+                  React.createElement(Tag, null, agent.model ? (agent.provider ? agent.provider + ' / ' : '') + agent.model : '远端默认模型'),
                 ),
+                agent.description ? React.createElement('div', { className: 'onm-item-desc' }, agent.description) : null,
+                React.createElement(
+                  'dl',
+                  { className: 'onm-meta' },
+                  React.createElement(MetaRow, { label: '绑定', children: React.createElement('span', { className: 'onm-mono' }, refLabel(agent)) }),
+                  React.createElement(MetaRow, { label: '模式', children: agent.agentPreset || 'cordis' }),
+                  React.createElement(MetaRow, { label: '工作目录', children: React.createElement('span', { className: 'onm-mono' }, agent.workDir || '远端默认') }),
+                  React.createElement(MetaRow, { label: '技能/资源', children: (agent.skills || []).length + ' 技能 · ' + (agent.resources || []).length + ' 资源' + (agent.systemPrompt ? ' · 有角色提示词' : '') }),
+                ),
+                React.createElement(
+                  'div',
+                  { className: 'onm-actions' },
+                  React.createElement(Btn, { size: 'sm', onClick: () => setEditing(agent) }, '编辑'),
+                  React.createElement(Btn, { size: 'sm', onClick: () => copyMention(agent), title: '复制 @名称 到剪贴板' }, '复制 @'),
+                  React.createElement(Btn, { size: 'sm', onClick: () => props.onCheck(agent), disabled: props.health[agent.id]?.state === 'checking' }, '探测'),
+                  React.createElement(Btn, { size: 'sm', onClick: () => preview(agent) }, '提示词'),
+                  React.createElement(Btn, { size: 'sm', variant: 'ghost', onClick: () => toggle(agent) }, agent.enabled === false ? '启用' : '停用'),
+                  React.createElement(
+                    Btn,
+                    { size: 'sm', variant: 'danger', onClick: () => remove(agent), title: confirmId === agent.id ? '4 秒内再次点击确认删除' : undefined },
+                    confirmId === agent.id ? '确认删除？' : '删除',
+                  ),
+                ),
+                props.health[agent.id]?.state === 'error'
+                  ? React.createElement(Banner, { kind: 'err', text: '探测失败：' + (props.health[agent.id]?.error || '未知错误') })
+                  : null,
               ),
             ),
           ),
-        ),
 
     detail
       ? React.createElement(
           'div',
           null,
           React.createElement('div', { className: 'onm-row', style: { marginTop: 10 } },
-            React.createElement('span', { className: 'onm-sub', style: { margin: 0 } }, '探测详情'),
+            React.createElement('span', { className: 'onm-sub', style: { margin: 0 } }, '详情'),
             React.createElement('div', { className: 'onm-spacer' }),
+            React.createElement(Btn, { size: 'sm', variant: 'ghost', onClick: () => copyText(detail).then(() => setMessage({ kind: 'ok', text: '已复制' })) }, '复制'),
             React.createElement(Btn, { size: 'sm', variant: 'ghost', onClick: () => setDetail(undefined) }, '收起'),
           ),
           React.createElement('pre', { className: 'onm-pre onm-mono' }, detail),
@@ -1255,6 +1375,12 @@ function ConnectionCard(props: { settings: any; onSaved: () => void }) {
   const [message, setMessage] = React.useState<Message | undefined>(undefined)
   const [busy, setBusy] = React.useState(false)
   const [open, setOpen] = React.useState(false)
+  const [showKey, setShowKey] = React.useState(false)
+  useAutoDismiss(message, () => setMessage(undefined))
+  // 未配置时自动展开，引导首次填写
+  React.useEffect(() => {
+    if (props.settings && Object.keys(props.settings).length && !(props.settings?.onenat?.baseUrl && props.settings?.onenat?.apiKey)) setOpen(true)
+  }, [props.settings])
 
   React.useEffect(() => {
     setBaseUrl(String(props.settings?.onenat?.baseUrl || ''))
@@ -1294,8 +1420,14 @@ function ConnectionCard(props: { settings: any; onSaved: () => void }) {
           { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
           React.createElement('div', { className: 'onm-grid' },
             React.createElement(Field, { label: 'ONENAT 服务地址', children: React.createElement(TextInput, { value: baseUrl, mono: true, onChange: setBaseUrl, placeholder: 'https://onenat.sooncore.com' }) }),
-            React.createElement(Field, { label: 'ONENAT API Key', children: React.createElement(TextInput, { value: apiKey, mono: true, onChange: setApiKey, placeholder: 'onk-…' }) }),
-            React.createElement(Field, { label: '派发超时（毫秒）', children: React.createElement(TextInput, { value: timeoutMs, inputMode: 'numeric', onChange: setTimeoutMs }) }),
+            React.createElement(Field, {
+              label: 'ONENAT API Key',
+              children: React.createElement('div', { className: 'onm-row', style: { flexWrap: 'nowrap' } },
+                React.createElement('div', { style: { flex: '1 1 auto', minWidth: 0 } }, React.createElement(TextInput, { value: apiKey, mono: true, type: showKey ? 'text' : 'password', onChange: setApiKey, placeholder: 'onk-…', onEnter: save })),
+                React.createElement(Btn, { size: 'sm', variant: 'ghost', onClick: () => setShowKey(!showKey), title: showKey ? '隐藏' : '显示' }, showKey ? '隐藏' : '显示'),
+              ),
+            }),
+            React.createElement(Field, { label: '派发超时（秒）', hint: '远端子智能体单次任务的最长等待时间', children: React.createElement(TextInput, { value: String(Math.round((Number(timeoutMs) || 900000) / 1000)), inputMode: 'numeric', onChange: (v: string) => setTimeoutMs(String((Number(v.replace(/\D/g, '')) || 0) * 1000)), onEnter: save }) }),
           ),
           React.createElement(
             'label',
@@ -1318,21 +1450,31 @@ function ConnectionCard(props: { settings: any; onSaved: () => void }) {
 
 function ResourceCard() {
   const state = useAsync(async () => (await consoleApi.resources(true)) || {}, [], {} as any)
-  const endpoints: any[] = state.value?.endpoints || []
+  const all: any[] = state.value?.endpoints || []
+  const [query, setQuery] = React.useState('')
+  const [copied, setCopied] = React.useState<string | undefined>(undefined)
+  const q = query.trim().toLowerCase()
+  const endpoints = q ? all.filter((ep) => [ep.appName, ep.note, ep.mappingId, ep.tunnelName, ep.kind].some((s) => String(s || '').toLowerCase().includes(q))) : all
+  const entryOf = (ep: any): string => ep.kind === 'ssh' ? `ssh -p ${ep.port} ${ep.host}` : ep.baseUrl || `${ep.proto}://${ep.host}:${ep.port || '?'}`
+  const copyEntry = (ep: any): void => {
+    const key = ep.mappingId || ep.appId
+    copyText(entryOf(ep)).then(() => { setCopied(key); setTimeout(() => setCopied(undefined), 1500) })
+  }
   return React.createElement(
     'div',
     { className: 'onm-card' },
     React.createElement(
       'div',
       { className: 'onm-card-head' },
-      React.createElement('h3', { className: 'onm-card-title' }, 'ONENAT 资源目录', React.createElement(Tag, { tone: 'brand' }, String(endpoints.length))),
+      React.createElement('h3', { className: 'onm-card-title' }, 'ONENAT 资源目录', React.createElement(Tag, { tone: 'brand' }, String(all.length))),
       React.createElement('div', { className: 'onm-spacer' }),
+      all.length > 4 ? React.createElement('div', { className: 'onm-search' }, React.createElement(TextInput, { value: query, onChange: setQuery, placeholder: '搜索资源…' })) : null,
       React.createElement(Btn, { size: 'sm', onClick: state.reload, disabled: state.loading }, state.loading ? '刷新中…' : '↻ 刷新'),
     ),
     React.createElement('div', { className: 'onm-muted' }, '在输入框用 @ 可以直接选中下列资源；条目里的公网入口是实时解析结果。'),
     state.error ? React.createElement('div', { style: { marginTop: 8 } }, React.createElement(Banner, { kind: 'err', text: state.error })) : null,
     endpoints.length === 0
-      ? React.createElement('div', { className: 'onm-muted', style: { marginTop: 8 } }, '暂无资源（检查 ONENAT 地址与 Key，或确认 ONENAT 客户端在线）。')
+      ? React.createElement('div', { className: 'onm-empty' }, q ? '没有匹配「' + query + '」的资源' : '暂无资源（检查 ONENAT 地址与 Key，或确认 ONENAT 客户端在线）。')
       : React.createElement(
           'div',
           { className: 'onm-list' },
@@ -1353,8 +1495,12 @@ function ResourceCard() {
                 { className: 'onm-meta' },
                 React.createElement(MetaRow, {
                   label: '入口',
-                  children: React.createElement('span', { className: 'onm-mono' }, ep.kind === 'ssh' ? `ssh -p ${ep.port} @${ep.host}` : ep.baseUrl || `${ep.proto}://${ep.host}:${ep.port || '?'}`),
+                  children: React.createElement('span', null,
+                    React.createElement('span', { className: 'onm-mono' }, entryOf(ep)), ' ',
+                    React.createElement('button', { type: 'button', className: 'onm-linkbtn', onClick: () => copyEntry(ep) }, copied === (ep.mappingId || ep.appId) ? '已复制' : '复制'),
+                  ),
                 }),
+                React.createElement(MetaRow, { label: 'ID', children: React.createElement('span', { className: 'onm-mono' }, ep.mappingId || ep.appId) }),
                 React.createElement(MetaRow, { label: '隧道', children: ep.tunnelName || '—' }),
               ),
             ),
@@ -1614,8 +1760,8 @@ function MentionStatusLine() {
         : 'var(--dsw-alias-state-warn-primary, #d97706)'
   const label =
     status.state === 'ready'
-      ? `WorkBuddy @ 就绪 · ${status.agentCount} 个子智能体 / ${status.resourceCount} 个资源可 @`
-      : `WorkBuddy @ ${status.state === 'error' ? '异常' : '等待中'}：${status.detail}`
+      ? `oneNat @ 就绪 · ${status.agentCount} 个子智能体 / ${status.resourceCount} 个资源可 @`
+      : `oneNat @ ${status.state === 'error' ? '异常' : '等待中'}：${status.detail}`
 
   const refresh = (): void => {
     setBusy(true)
@@ -1646,32 +1792,14 @@ function MentionStatusLine() {
   )
 }
 
-// --------------------------------------------------------------- 提及解析自检
-
-function MentionTester() {
-  const [text, setText] = React.useState('请 @kb-136-builder 帮我检查一下环境')
-  const [result, setResult] = React.useState<string | undefined>(undefined)
-  return React.createElement(
-    'div',
-    { className: 'onm-card' },
-    React.createElement('h3', { className: 'onm-card-title' }, '提及解析自检'),
-    React.createElement('div', { className: 'onm-muted', style: { marginTop: 6 } }, '验证一段文本会被解析成哪些实体（用于确认 @ 名称是否唯一可辨）。'),
-    React.createElement(
-      'div',
-      { className: 'onm-row', style: { marginTop: 8 } },
-      React.createElement('div', { style: { flex: '1 1 200px', minWidth: 0 } },
-        React.createElement(TextInput, { value: text, onChange: setText }),
-      ),
-      React.createElement(Btn, { onClick: () => consoleApi.parse(text).then((d) => setResult(JSON.stringify(d, null, 2))).catch((e) => setResult(String(e?.message || e))) }, '解析'),
-    ),
-    result ? React.createElement('pre', { className: 'onm-pre onm-mono' }, result) : null,
-  )
-}
-
 // ---------------------------------------------------------------------- 页面
 
 function Section(props: { onMentionChanged?: () => void }) {
-  const settings = useAsync(async () => (await consoleApi.settingsGet()) || {}, [], {} as any)
+  // GET /api/settings 返回 { settings, storePath }，这里解包成纯 settings 对象
+  const settings = useAsync(async () => {
+    const data: any = (await consoleApi.settingsGet()) || {}
+    return data.settings || data
+  }, [], {} as any)
   const agents = useAsync(async () => (await consoleApi.agentsList()) || [], [], [] as any[])
   const resources = useAsync(async () => (await consoleApi.resources(false)) || {}, [], {} as any)
 
@@ -1685,20 +1813,75 @@ function Section(props: { onMentionChanged?: () => void }) {
   const endpoints: any[] = resources.value?.endpoints || []
   const agentList: any[] = Array.isArray(agents.value) ? agents.value : []
 
+  // 子智能体健康状态：打开页面后自动探测一次（逐个并发），之后按需手动探测
+  const [health, setHealth] = React.useState<Record<string, Health>>({})
+  const check = React.useCallback((agent: any): void => {
+    setHealth((h) => ({ ...h, [agent.id]: { state: 'checking' } }))
+    const t0 = Date.now()
+    consoleApi
+      .agentsPing(agent.id)
+      .then((data: any) => {
+        const ok = Boolean(data?.ping?.ok)
+        setHealth((h) => ({
+          ...h,
+          [agent.id]: ok
+            ? { state: 'ok', ms: Date.now() - t0, entry: data?.resolved?.baseUrl }
+            : { state: 'error', error: data?.ping?.error || data?.resolved?.error || '远端无响应' },
+        }))
+      })
+      .catch((err: any) => setHealth((h) => ({ ...h, [agent.id]: { state: 'error', error: String(err?.message || err) } })))
+  }, [])
+  const autoChecked = React.useRef(false)
+  React.useEffect(() => {
+    if (autoChecked.current || agentList.length === 0) return
+    autoChecked.current = true
+    agentList.filter((a) => a.enabled !== false).forEach(check)
+  }, [agentList, check])
+
+  const enabledCount = agentList.filter((a) => a.enabled !== false).length
+  const okCount = agentList.filter((a) => health[a.id]?.state === 'ok').length
+  const errCount = agentList.filter((a) => health[a.id]?.state === 'error').length
+  const onlineEndpoints = endpoints.filter((e) => e.online).length
+  const configured = Boolean(settings.value?.onenat?.baseUrl && settings.value?.onenat?.apiKey)
+
+  const stat = (k: string, v: React.ReactNode, sub?: string, title?: string) =>
+    React.createElement('div', { className: 'onm-stat', title }, React.createElement('div', { className: 'v' }, v, sub ? React.createElement('small', null, ' ' + sub) : null), React.createElement('div', { className: 'k' }, k))
+
   return React.createElement(
     'div',
     { className: 'onm-root' },
     React.createElement(
       'div',
-      { className: 'onm-muted' },
-      'OneNat WorkBuddy @ —— 在 DSH 原生输入框用 @ 指定 ONENAT 上的子智能体与资源。选中即插入胶囊，发送后由宿主把「指认指令」与「资源清单」注入本轮上下文；子智能体派发走 onenat_agent 工具，远端会话按本会话长持复用。',
+      { className: 'onm-hero' },
+      React.createElement(
+        'div',
+        { className: 'onm-muted' },
+        'OneNat oneNat @ —— 在 DSH 输入框用 @ 指定 ONENAT 上的子智能体与资源，发送后由宿主把指认指令与资源清单注入本轮上下文。',
+      ),
+      React.createElement(
+        'div',
+        { className: 'onm-stats' },
+        stat('子智能体', agentList.length, enabledCount === agentList.length ? '' : enabledCount + ' 启用'),
+        stat('入口在线', okCount, errCount ? errCount + ' 不可达' : agentList.length ? '/ ' + agentList.length : '', '打开页面时自动探测已启用的子智能体'),
+        stat('ONENAT 资源', onlineEndpoints, '/ ' + endpoints.length + ' 在线'),
+        stat('ONENAT 连接', configured ? '已配置' : '未配置', '', settings.value?.onenat?.baseUrl || ''),
+      ),
+      !configured && !settings.loading
+        ? React.createElement(Banner, { kind: 'err', text: 'ONENAT 服务地址或 API Key 未配置：展开下方「ONENAT 连接与派发默认值」填写后，资源目录和子智能体绑定才能用。' })
+        : null,
+      React.createElement(
+        'ul',
+        { className: 'onm-muted onm-tips' },
+        React.createElement('li', null, '派发：输入框打 @ 选子智能体，后面直接写任务。'),
+        React.createElement('li', null, '添加：点「＋ 新增」填表，或在聊天框说「帮我添加一个绑定 KB 136 环境-DSH、角色是质检员的子智能体」。'),
+        React.createElement('li', null, '资源：@ 资源后，入口与凭证策略会随本轮注入，AI 可直接使用或转交子智能体。'),
+      ),
     ),
     agents.error ? React.createElement(Banner, { kind: 'err', text: agents.error }) : null,
-    React.createElement(AgentCard, { agents: agentList, endpoints, onChanged: refreshAll }),
     React.createElement(ConnectionCard, { settings: settings.value, onSaved: refreshAll }),
     React.createElement(ResourceCard, null),
     React.createElement(SshCard, { onChanged: refreshAll }),
-    React.createElement(MentionTester, null),
+    React.createElement(AgentCard, { agents: agentList, endpoints, onChanged: refreshAll, health, onCheck: check }),
   )
 }
 
@@ -1750,7 +1933,7 @@ export function apply(ctx: ClientCtx): void {
       ctx.slots.inject('settings.section', () => {
         // NOTE: `{ name: ... }` 必须与 register( 同行内联——注入器骨架校验
         // 用 register\(\{ 前缀正则匹配 slot 名，换行会导致重启恢复被跳过。
-        const unregister = ctx.slots.register({ name: 'settings.section', id: 'onenat-workbuddy-mention', order: 42, label: () => 'WorkBuddy @' }, () => React.createElement(Section, { onMentionChanged: () => { void mention.refresh() } }))
+        const unregister = ctx.slots.register({ name: 'settings.section', id: 'dsh-onenat', order: 42, label: () => 'oneNat @' }, () => React.createElement(Section, { onMentionChanged: () => { void mention.refresh() } }))
         return () => {
           unregister()
         }
@@ -1764,7 +1947,7 @@ export function apply(ctx: ClientCtx): void {
       ctx.slots.inject('conversation.composer.dock', () => {
         // NOTE: `{ name: ... }` 必须与 register( 同行内联——注入器骨架校验
         // 用 register\(\{ 前缀正则匹配 slot 名，换行会导致重启恢复被跳过。
-        const unregister = ctx.slots.register({ name: 'conversation.composer.dock', id: 'onenat-workbuddy-mention-status', order: 60 }, MentionStatusLine)
+        const unregister = ctx.slots.register({ name: 'conversation.composer.dock', id: 'dsh-onenat-status', order: 60 }, MentionStatusLine)
         return () => {
           unregister()
         }

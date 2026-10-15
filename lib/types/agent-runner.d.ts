@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy-mention - 单次远端派发执行器
+ * @dsh-external/dsh-onenat - 单次远端派发执行器
  *
  * 一次派发 = 一个「自包含任务」交给某个 ONENAT 子智能体：
  *   1. 解析：AgentResolver 强刷 ONENAT → 当下 baseUrl（D1 端口漂移免疫）

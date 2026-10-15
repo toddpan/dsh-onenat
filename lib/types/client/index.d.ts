@@ -1,5 +1,5 @@
 /**
- * @dsh-external/onenat-workbuddy-mention — DSH Web GUI 集成
+ * @dsh-external/dsh-onenat — DSH Web GUI 集成
  *
  * 只有两件事，都在 DSH 原生界面里：
  *   1. `@` 输入触发源（ctx.inputTriggers）：候选 = ONENAT 子智能体 + ONENAT 资源 + 本地 SSH 资源；

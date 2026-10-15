@@ -1,7 +1,7 @@
 /**
- * @dsh-external/onenat-workbuddy-mention
+ * @dsh-external/dsh-onenat
  *
- * OneNat WorkBuddy @ —— 让 DSH 原生对话直接使用 ONENAT 上的子智能体与资源：
+ * OneNat oneNat @ —— 让 DSH 原生对话直接使用 ONENAT 上的子智能体与资源：
  *   1. 子智能体管理：绑定 ONENAT 稳定 ID（mappingId/appId），端口漂移免疫，设置页可视化管理；
  *   2. 子智能调用：onenat_agent 工具把任务派发给远端 DSH 会话并长持复用；
  *   3. @ 指定：DSH 输入框敲 @ 选择子智能体 / 资源 → 原子胶囊 → 宿主在 agent/pre-step 注入上下文。
@@ -29,14 +29,14 @@ import { registerTools, renderAgentRoster } from './tools.js'
 import { registerClientBridge } from './bridge.js'
 import type { PluginConfig } from './types.js'
 
-export const name = '@dsh-external/onenat-workbuddy-mention'
+export const name = '@dsh-external/dsh-onenat'
 export const inject = ['tools']
 
 export interface Config extends PluginConfig {}
 
 export const Config: z<Config> = z.object({
-  pathPrefix: z.string().default('/onenat-workbuddy-mention').description('管理 API 路由前缀'),
-  storagePath: z.string().default('').description('本地存储文件绝对路径（留空则 ~/.dsh/onenat-workbuddy-mention/store.json）'),
+  pathPrefix: z.string().default('/dsh-onenat').description('管理 API 路由前缀'),
+  storagePath: z.string().default('').description('本地存储文件绝对路径（留空则 ~/.dsh/dsh-onenat/store.json）'),
   onenatBaseUrl: z.string().default('').description('ONENAT 服务地址（留空用存储中的设置）'),
   onenatApiKey: z.string().default('').description('ONENAT API Key（onk-…，留空用存储中的设置）'),
   autoRefreshMs: z.number().default(60_000).description('资源目录自动刷新间隔（毫秒）'),
@@ -64,9 +64,9 @@ export const CLIENT_RPC = {
 } as const
 
 export function apply(ctx: Context, config: Config): void {
-  const prefix = (config.pathPrefix || '/onenat-workbuddy-mention').replace(/\/+$/, '')
+  const prefix = (config.pathPrefix || '/dsh-onenat').replace(/\/+$/, '')
   const log = (msg: string): void => {
-    console.log(`[onenat-workbuddy-mention] ${msg}`)
+    console.log(`[dsh-onenat] ${msg}`)
   }
 
   const store = new WorkStore(config.storagePath || undefined)
@@ -85,7 +85,7 @@ export function apply(ctx: Context, config: Config): void {
     () => () => {
       directory.stopAutoRefresh()
     },
-    'onenat-workbuddy-mention: auto refresh',
+    'dsh-onenat: auto refresh',
   )
 
   const resolver = new AgentResolver(store, directory)
@@ -95,15 +95,16 @@ export function apply(ctx: Context, config: Config): void {
   const runner = new AgentRunner(store, resolver, composer, resources)
 
   const router = new ManageRouter({ store, directory, resolver, runner, parser, sshStore, log })
-  const webServer = ctx.get('webServer') as {
+  type WebServerLike = {
     port?: number
     register(route: unknown): () => void
     tapIndex?(transform: (html: string) => string): () => void
-  } | undefined
+  }
 
-  if (webServer === undefined) {
-    log('webServer 服务不可用：管理 API 与设置页未挂载（模型工具仍可用）')
-  } else {
+  // 按需注入：插件本身只依赖 tools，webServer 可能比本插件晚就绪（desktop profile 启动顺序）。
+  // 用 ctx.inject 等 webServer 可用时再挂载管理 API；webServer 重启时自动重挂。
+  ctx.inject(['webServer'], (ctx) => {
+    const webServer = ctx.get('webServer') as WebServerLike
     ctx.effect(
       () =>
         webServer.register({
@@ -118,7 +119,7 @@ export function apply(ctx: Context, config: Config): void {
             }
           },
         }),
-      'onenat-workbuddy-mention: management api',
+      'dsh-onenat: management api',
     )
 
     // 把管理 API 前缀注入页面：浏览器半边（设置页/@ 候选）据此同源调用
@@ -128,13 +129,14 @@ export function apply(ctx: Context, config: Config): void {
           webServer.tapIndex!((html) =>
             html.replace(
               '</head>',
-              `<script>globalThis.__DSH_ONENAT_WORKBUDDY__ = ${JSON.stringify({ pathPrefix: prefix })}</script></head>`,
+              `<script>globalThis.__DSH_ONENAT_oneNat__ = ${JSON.stringify({ pathPrefix: prefix })}</script></head>`,
             ),
           ),
-        'onenat-workbuddy-mention: index injection',
+        'dsh-onenat: index injection',
       )
     }
-  }
+    log(`管理 API 已挂载: http://127.0.0.1:${webServer.port || 3080}${prefix}/api/settings`)
+  })
 
   registerTools(ctx, { store, directory, resolver, runner, sshStore, parser, log })
 
@@ -148,14 +150,14 @@ export function apply(ctx: Context, config: Config): void {
     ctx.effect(
       () =>
         systemPrompt.section({
-          name: 'onenat-workbuddy-mention',
+          name: 'dsh-onenat',
           order: 2810,
           text: () => {
             const roster = renderAgentRoster(store)
             const endpoints = directory.listEndpoints()
             if (!roster && endpoints.length === 0) return ''
             const lines: string[] = []
-            lines.push('# OneNat WorkBuddy（ONENAT 资源面 + 远端 DSH 子智能体）')
+            lines.push('# OneNat oneNat（ONENAT 资源面 + 远端 DSH 子智能体）')
             lines.push('')
             lines.push('用户可以在输入框用 `@` 指定 ONENAT 上的子智能体或资源：')
             lines.push('- `@子智能体` → 用户在指认"这件事交给它做"，请用 `onenat_agent` 工具派发（task 必须自包含）。')
@@ -175,12 +177,11 @@ export function apply(ctx: Context, config: Config): void {
             return lines.join('\n')
           },
         }),
-      'onenat-workbuddy-mention: prompt roster',
+      'dsh-onenat: prompt roster',
     )
   }
 
   registerPreStep(ctx, { store, parser, composer, resources }, log)
 
-  const port = webServer?.port || 3080
-  log(`Mounted. 管理 API: http://127.0.0.1:${port}${prefix}/api/settings  ONENAT: ${directory.endpoint || '(未配置)'}`)
+  log(`Mounted. ONENAT: ${directory.endpoint || '(未配置)'}`)
 }

@@ -1,23 +1,23 @@
-# ONENAT WorkBuddy 原生集成（@ 提及版）实现方案
+# ONENAT oneNat 原生集成（@ 提及版）实现方案
 
-> 目标插件（暂定名）：`@dsh-external/onenat-workbuddy` v0.2（重构版）
-> 目录：`/Users/tsbj/feyanggit/DHS-test/onenat-workbuddy`（原地重构）
-> 替代对象：现有 WorkBuddy 独立控制台（iframe 面板 + 自建聊天窗口 + 自建 REST 引擎）
+> 目标插件（暂定名）：`@dsh-external/dsh-onenat` v0.2（重构版）
+> 目录：`/Users/tsbj/feyanggit/DHS-test/dsh-onenat`（原地重构）
+> 替代对象：现有 oneNat 独立控制台（iframe 面板 + 自建聊天窗口 + 自建 REST 引擎）
 
 ---
 
-## 一、我对现有 onenat-workbuddy 的理解
+## 一、我对现有 dsh-onenat 的理解
 
 ### 1.1 它现在是什么
 
 一句话：**把 ONENAT 上的隧道/应用资源，变成"可被 AI 使用的资源清单"，并把多个远程 DSH 实例变成"可被派活的子智能体"，再用一个自建控制台把这条链路跑起来。**
 
 ```
-浏览器：DSH Web GUI 侧栏「WorkBuddy」入口 → 中央列 iframe 嵌入 /onenat-workbuddy 自建控制台
+浏览器：DSH Web GUI 侧栏「oneNat」入口 → 中央列 iframe 嵌入 /dsh-onenat 自建控制台
                                         （自建聊天窗口、自建 SSE、自建会话列表）
-主控 DSH：onenat-workbuddy 插件
+主控 DSH：dsh-onenat 插件
    ├─ OnenatDirectory    ← GET /api/v1/resources（唯一实时资源源；稳定 ID → 当前公网端口）
-   ├─ WorkStore          ← agents / tasks / settings 落 ~/.dsh/onenat-workbuddy/store.json
+   ├─ WorkStore          ← agents / tasks / settings 落 ~/.dsh/dsh-onenat/store.json
    ├─ SshResourceStore   ← 本地直连 SSH 资源池（补充 ONENAT 之外的机器）
    ├─ AgentResolver      ← 每次派发前强刷 ONENAT，mappingId/appId → 当下 baseUrl（端口漂移免疫）
    ├─ PromptComposer     ← 「资源即提示词」：入口 + 凭证策略 + 技能手势 → 提示词块
@@ -35,11 +35,11 @@
 | 远端会话长持 | `engine.ts`（D3） | `(任务, 成员) → remoteSessionId` 持久复用，多轮续聊 |
 | 远端会话驱动 | `remote-client.ts` | `POST /sessions` `POST /sessions/:id/prompt-stream`(SSE) `/history` `/cancel` `/files` `/questions` `/answers` |
 | 本地 SSH 资源池 | `ssh-store.ts` + `ssh-resources.ts` | 密码/私钥、真实连通测试、`exec` 远程执行 |
-| @ 语义雏形 | `engine.ts#extractMentions` + `router.ts /api/mentions/candidates` | 已经有一套「候选目录 + 文本 @ 解析（最长前缀匹配）」——**但只在 WorkBuddy 自己的聊天框里生效** |
+| @ 语义雏形 | `engine.ts#extractMentions` + `router.ts /api/mentions/candidates` | 已经有一套「候选目录 + 文本 @ 解析（最长前缀匹配）」——**但只在 oneNat 自己的聊天框里生效** |
 
 ### 1.3 现在的痛点（也是本次重构的动因）
 
-1. **入口割裂**：资源和子智能体在 workbuddy 自己的 iframe 聊天框里才可用；在 DSH 原生对话里，主智能体完全看不见 ONENAT 的资源面。
+1. **入口割裂**：资源和子智能体在 oneNat 自己的 iframe 聊天框里才可用；在 DSH 原生对话里，主智能体完全看不见 ONENAT 的资源面。
 2. **重复造轮子**：自建聊天窗口、自建 SSE 网关、自建会话列表、自建统计条 —— 这些 DSH Web GUI 原生就有，且更好（工具调用卡、思维链折叠、附件、终止、token 统计）。
 3. **@ 用不起来**：`@` 只在自建输入框里是"字符串匹配"，不参与 DSH 的输入法、不产生结构化引用、模型侧拿不到结构化身份。
 
@@ -145,8 +145,8 @@ interface SubAgent {
 }
 ```
 
-**管理入口（正规槽位，不是第二个控制台）**：客户端 `slots.register({ name: 'settings.section', id: 'onenat-workbuddy' })`
-→ 设置页内一页 `ONENAT WorkBuddy`：资源目录（在线状态/当前入口）· 子智能体 CRUD（含连通探测、模型/preset 拉取、**资源绑定的提示词预览**）· 本地 SSH 资源池 · ONENAT 连接设置。
+**管理入口（正规槽位，不是第二个控制台）**：客户端 `slots.register({ name: 'settings.section', id: 'dsh-onenat' })`
+→ 设置页内一页 `ONENAT oneNat`：资源目录（在线状态/当前入口）· 子智能体 CRUD（含连通探测、模型/preset 拉取、**资源绑定的提示词预览**）· 本地 SSH 资源池 · ONENAT 连接设置。
 
 **模型工具** `onenat_manage`：与设置页共享同一存储与同一 API ——
 `action: list|upsert|delete|ping|preview|resources|resolve|ssh-list|ssh-upsert|ssh-test|ssh-exec`。
@@ -250,8 +250,8 @@ const source = {
 
 ### 4.6 兼容与迁移
 
-- **数据兼容**：沿用 `~/.dsh/onenat-workbuddy/store.json`（agents / settings 原样可读；tasks 段保留但不加载，首次启动备份为 `store.v1.bak.json`）。
-- **与旧版共存**：若旧版仍注入在运行，两者都注册 `@` 源会各占一组（name 不同不冲突）；建议验完新版后 `dev_uninject_plugin onenat-workbuddy` 卸旧版、再注入新版。
+- **数据兼容**：沿用 `~/.dsh/dsh-onenat/store.json`（agents / settings 原样可读；tasks 段保留但不加载，首次启动备份为 `store.v1.bak.json`）。
+- **与旧版共存**：若旧版仍注入在运行，两者都注册 `@` 源会各占一组（name 不同不冲突）；建议验完新版后 `dev_uninject_plugin dsh-onenat` 卸旧版、再注入新版。
 - **构建/注入路径不变**：`bash scripts/build.sh` → `npm run build:client`(tsdown) → `dev_build_plugin` → `dev_inject_plugin`。
 
 ### 4.7 交付物与验收
@@ -287,9 +287,9 @@ const source = {
 |---|---|---|
 | A | **子智能调用实现层**：① 自建 `onenat_agent` 工具（本方案默认）② 进一步实现 `ctx.subagents` Provider，让远端 DSH 变成原生 `subagent` 工具的一个 provider ③ 只做提示词注入（模型自己用 bash/HTTP 调远端） | **①**：语义清晰、可控、可观测；②作为后续增强；③太脆弱 |
 | B | **`@资源` 的凭证注入**：`inline`（直接把密码写进 pre-step 消息，模型可见、也进入会话历史）/ `self-fetch`（只给凭据接口让 AI 自取）/ `omit` | **按资源逐个配置，默认 SSH 用 `inline`、HTTP 用 `self-fetch`**（与旧版一致；注意 inline 会落进会话历史） |
-| C | **是否保留旧版 WorkBuddy 控制台**：① 完全替换（删除 web-ui/engine/planner，本方案默认）② 新版与旧控制台共存（双轨） | **①**：你要的就是"不再单独写一个 DSH WEB 插件式的功能" |
+| C | **是否保留旧版 oneNat 控制台**：① 完全替换（删除 web-ui/engine/planner，本方案默认）② 新版与旧控制台共存（双轨） | **①**：你要的就是"不再单独写一个 DSH WEB 插件式的功能" |
 | D | **管理 UI 落点**：① 设置页 `settings.section`（整页，root 槽位，零替换风险）② 输入区小面板 ③ 保留独立控制台 | **①** |
-| E | **插件名与目录**：原地重构 `/Users/tsbj/feyanggit/DHS-test/onenat-workbuddy`（包名沿用 `@dsh-external/onenat-workbuddy`，版本升 0.2.0） | **是**（git 历史保留，删除的模块可回溯） |
+| E | **插件名与目录**：原地重构 `/Users/tsbj/feyanggit/DHS-test/dsh-onenat`（包名沿用 `@dsh-external/dsh-onenat`，版本升 0.2.0） | **是**（git 历史保留，删除的模块可回溯） |
 
 ---
 
