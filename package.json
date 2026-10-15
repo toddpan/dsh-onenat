@@ -4,7 +4,7 @@
   "description": "OneNat WorkBuddy @ —— 在 DSH 原生输入框用 @ 指定 ONENAT 子智能体与资源（子智能体管理 / 子智能调用 / 资源提示词注入）",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/toddpan/onenat-workbuddy-mention.git"
+    "url": "git+https://github.com/toddpan/dsh-onenat.git"
   },
   "keywords": [
     "deepseek-harness",
