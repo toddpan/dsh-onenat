@@ -221,7 +221,7 @@ const source = {
 
 ```
 @[kb-136-builder](onenat-agent:ag_7f3a)
-@[测试 B 环境 SSH](onenat-resource:map_9c21)
+@[测试 B 环境 SSH](onenat-resource:map_<id>)
 @[内网跳板机](onenat-resource:ssh_local_2b)
 ```
 - 人看：DSH 消息渲染成 `@kb-136-builder` 可读胶囊；

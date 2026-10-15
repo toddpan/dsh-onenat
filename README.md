@@ -84,7 +84,7 @@ onenat_agent({
 | 提及 | 序列化 | 宿主行为 |
 |---|---|---|
 | `@子智能体` | `@[brain-质检员](onenat-agent:agent-gqqagtgu)` | 注入「指认指令」；模型用 `onenat_agent` 真正派发 |
-| `@ONENAT 资源` | `@[测试 B 环境-DSH](onenat-resource:6cc2987d)` | 注入实时入口 + 凭证策略（`self-fetch`：只给取凭证的 curl 接口）+ 技能安装/加载指引 |
+| `@ONENAT 资源` | `@[测试 B 环境-DSH](onenat-resource:<mappingId>)` | 注入实时入口 + 凭证策略（`self-fetch`：只给取凭证的 curl 接口）+ 技能安装/加载指引 |
 | `@本地 SSH 资源` | `@[kb-136](onenat-resource:ssh:ssh-y7in6o75)` | 注入连接命令与凭证（本地资源池属本机信任域，直接内联） |
 
 - **未提及任何 onenat 实体时零注入**（不产生任何 token 开销）；
