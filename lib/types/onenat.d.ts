@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-onenat - ONENAT 资源目录与解析器
+ * dsh-onenat - ONENAT 资源目录与解析器
  *
  * 唯一实时数据源: GET /api/v1/resources（+ /api/v1/apps 交叉补充）
  * 解析规则对齐 onenat.md（实测语义）:

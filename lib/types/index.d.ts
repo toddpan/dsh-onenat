@@ -1,7 +1,7 @@
 /**
- * @dsh-external/dsh-onenat
+ * dsh-onenat
  *
- * OneNat oneNat @ —— 让 DSH 原生对话直接使用 ONENAT 上的子智能体与资源：
+ * oneNat@ —— 让 DSH 原生对话直接使用 ONENAT 上的子智能体与资源：
  *   1. 子智能体管理：绑定 ONENAT 稳定 ID（mappingId/appId），端口漂移免疫，设置页可视化管理；
  *   2. 子智能调用：onenat_agent 工具把任务派发给远端 DSH 会话并长持复用；
  *   3. @ 指定：DSH 输入框敲 @ 选择子智能体 / 资源 → 原子胶囊 → 宿主在 agent/pre-step 注入上下文。
@@ -11,7 +11,7 @@
 import type { Context } from 'cordis';
 import z from 'schemastery';
 import type { PluginConfig } from './types.js';
-export declare const name = "@dsh-external/dsh-onenat";
+export declare const name = "dsh-onenat";
 export declare const inject: string[];
 export interface Config extends PluginConfig {
 }

@@ -1760,8 +1760,8 @@ function MentionStatusLine() {
         : 'var(--dsw-alias-state-warn-primary, #d97706)'
   const label =
     status.state === 'ready'
-      ? `oneNat @ 就绪 · ${status.agentCount} 个子智能体 / ${status.resourceCount} 个资源可 @`
-      : `oneNat @ ${status.state === 'error' ? '异常' : '等待中'}：${status.detail}`
+      ? `oneNat@ 就绪 · ${status.agentCount} 个子智能体 / ${status.resourceCount} 个资源可 @`
+      : `oneNat@ ${status.state === 'error' ? '异常' : '等待中'}：${status.detail}`
 
   const refresh = (): void => {
     setBusy(true)
@@ -1856,7 +1856,7 @@ function Section(props: { onMentionChanged?: () => void }) {
       React.createElement(
         'div',
         { className: 'onm-muted' },
-        'OneNat oneNat @ —— 在 DSH 输入框用 @ 指定 ONENAT 上的子智能体与资源，发送后由宿主把指认指令与资源清单注入本轮上下文。',
+        'oneNat@ —— 在 DSH 输入框用 @ 指定 ONENAT 上的子智能体与资源，发送后由宿主把指认指令与资源清单注入本轮上下文。',
       ),
       React.createElement(
         'div',
@@ -1933,7 +1933,7 @@ export function apply(ctx: ClientCtx): void {
       ctx.slots.inject('settings.section', () => {
         // NOTE: `{ name: ... }` 必须与 register( 同行内联——注入器骨架校验
         // 用 register\(\{ 前缀正则匹配 slot 名，换行会导致重启恢复被跳过。
-        const unregister = ctx.slots.register({ name: 'settings.section', id: 'dsh-onenat', order: 42, label: () => 'oneNat @' }, () => React.createElement(Section, { onMentionChanged: () => { void mention.refresh() } }))
+        const unregister = ctx.slots.register({ name: 'settings.section', id: 'dsh-onenat', order: 42, label: () => 'oneNat@' }, () => React.createElement(Section, { onMentionChanged: () => { void mention.refresh() } }))
         return () => {
           unregister()
         }

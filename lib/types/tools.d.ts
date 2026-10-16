@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-onenat - 模型工具
+ * dsh-onenat - 模型工具
  *
  *  onenat_agent   —— 把任务派发给 ONENAT 上的子智能体（远端 DSH 会话，长持复用）
  *  onenat_manage  —— 子智能体 / ONENAT 资源 / 本地 SSH 资源池的管理面

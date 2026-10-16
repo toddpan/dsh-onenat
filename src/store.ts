@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-onenat - WorkStore
+ * dsh-onenat - WorkStore
  *
  * 持久化：子智能体池 + (DSH 会话, 子智能体) → 远端会话长持映射 + 设置。
  * 落盘 ~/.dsh/dsh-onenat/store.json。

@@ -1,6 +1,6 @@
-# ONENAT oneNat 原生集成（@ 提及版）实现方案
+# oneNat原生集成（@ 提及版）实现方案
 
-> 目标插件（暂定名）：`@dsh-external/dsh-onenat` v0.2（重构版）
+> 目标插件（暂定名）：`dsh-onenat` v0.2（重构版）
 > 目录：`/Users/tsbj/feyanggit/DHS-test/dsh-onenat`（原地重构）
 > 替代对象：现有 oneNat 独立控制台（iframe 面板 + 自建聊天窗口 + 自建 REST 引擎）
 
@@ -289,7 +289,7 @@ const source = {
 | B | **`@资源` 的凭证注入**：`inline`（直接把密码写进 pre-step 消息，模型可见、也进入会话历史）/ `self-fetch`（只给凭据接口让 AI 自取）/ `omit` | **按资源逐个配置，默认 SSH 用 `inline`、HTTP 用 `self-fetch`**（与旧版一致；注意 inline 会落进会话历史） |
 | C | **是否保留旧版 oneNat 控制台**：① 完全替换（删除 web-ui/engine/planner，本方案默认）② 新版与旧控制台共存（双轨） | **①**：你要的就是"不再单独写一个 DSH WEB 插件式的功能" |
 | D | **管理 UI 落点**：① 设置页 `settings.section`（整页，root 槽位，零替换风险）② 输入区小面板 ③ 保留独立控制台 | **①** |
-| E | **插件名与目录**：原地重构 `/Users/tsbj/feyanggit/DHS-test/dsh-onenat`（包名沿用 `@dsh-external/dsh-onenat`，版本升 0.2.0） | **是**（git 历史保留，删除的模块可回溯） |
+| E | **插件名与目录**：原地重构 `/Users/tsbj/feyanggit/DHS-test/dsh-onenat`（包名 `dsh-onenat`，发布后版本升 0.2.0 / 0.2.1） | **是**（git 历史保留，删除的模块可回溯） |
 
 ---
 

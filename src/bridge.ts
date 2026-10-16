@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-onenat - 浏览器半边使用的主机 RPC 桥
+ * dsh-onenat - 浏览器半边使用的主机 RPC 桥
  *
  * 本插件是普通 bundle 插件（非动态 Cordis Package），因此浏览器半边不使用
  * 包私有的 `host.call`，而是调用本插件自己注册的同源管理 API

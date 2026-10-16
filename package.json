@@ -1,6 +1,6 @@
 {
   "name": "dsh-onenat",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OneNat WorkBuddy @ —— 在 DSH 原生输入框用 @ 指定 ONENAT 子智能体与资源（子智能体管理 / 子智能调用 / 资源提示词注入）",
   "repository": {
     "type": "git",

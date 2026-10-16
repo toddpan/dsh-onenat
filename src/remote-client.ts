@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-onenat - DSH 远程客户端（面向解析后的 ResolvedDshTarget）
+ * dsh-onenat - DSH 远程客户端（面向解析后的 ResolvedDshTarget）
  *
  * 相比 dsh-remote-orchestrator 的 RemoteDshClient 升级:
  *  1. 一切调用吃 { baseUrl, apiKey }（由 ResourceDirectory 实时解析而来），不再吃裸 agent（D1）

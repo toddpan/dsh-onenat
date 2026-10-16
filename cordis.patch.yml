@@ -10,4 +10,4 @@
 # (exports "./client") load in the web GUI（设置页 + @ 输入触发源 + 状态行）.
 - insert:
     - id: dsh-onenat
-      name: '@dsh-external/dsh-onenat'
+      name: 'dsh-onenat'

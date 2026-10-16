@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-onenat - agent/pre-step 注入
+ * dsh-onenat - agent/pre-step 注入
  *
  * 用户发出 `@子智能体` / `@资源` 后，本监听器在进入模型步之前：
  *   1. 把消息里的提及解析回结构化身份（MentionParser）；

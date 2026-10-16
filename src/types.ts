@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-onenat - 数据模型
+ * dsh-onenat - 数据模型
  *
  * 与 0.1.x（dsh-onenat 控制台版）的差别：
  *  - 删除 Task / Plan / Turn / 编排引擎相关类型（不再自建聊天会话与 DAG 编排）
