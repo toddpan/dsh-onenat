@@ -150,7 +150,7 @@ dsh plugin --profile web add https://github.com/toddpan/dsh-onenat
 
 > **首次安装若报 `ERR_PNPM_IGNORED_BUILDS`**：依赖 `ssh2` 带可选原生加速脚本，pnpm ≥10 默认拦截。桌面版插件管理会把它归为 `build-blocked` 并给出「允许构建脚本」的确认（写回 profile 的 `pnpm-workspace.yaml`，`allowBuilds` 下 `ssh2` / `cpu-features` 为 `true`），允许后重试即可；CLI 路径则按提示手改该文件后重跑。装过 dsh-remote-orchestrator 的 profile 通常已放行。不放心可设 `false`——本插件的连接测试会退化为纯 TCP 探测，只是认证握手与远程执行不可用。
 
-> **装完设置页里没有「oneNat@」？** 设置页由插件的浏览器半边注册，而浏览器半边只有在 Host 半边激活成功时才会进入启动图。先在**设置 → 插件**看该条目是否报 `failed to import` / `did not activate`：v0.2.1 及更早版本 Host 半边误用裸 `schemastery` 导入，而 dsh 运行时只提供 `@deepseek-ai/schemastery`，于是 `ERR_MODULE_NOT_FOUND` 让整条插件条目不激活（`@` 菜单同样不出现）。0.2.2 已修；旧版可临时把 `~/.dsh/profiles/desktop/node_modules/dsh-onenat/lib/index.js` 里的 `from 'schemastery'` 改成 `from '@deepseek-ai/schemastery'` 救急。
+> **装完设置页里没有「oneNat@」？** 设置页由插件的浏览器半边注册，而浏览器半边只有在 Host 半边激活成功时才会进入启动图。先在**设置 → 插件**看该条目是否报 `failed to import` / `did not activate`：v0.2.1 及更早版本 Host 半边误用裸 `schemastery` 导入，而 dsh 运行时只提供 `@deepseek-ai/schemastery`，于是 `ERR_MODULE_NOT_FOUND` 让整条插件条目不激活（`@` 菜单同样不出现）。0.2.2 已修（当前 0.3.0）；旧版可临时把 `~/.dsh/profiles/desktop/node_modules/dsh-onenat/lib/index.js` 里的 `from 'schemastery'` 改成 `from '@deepseek-ai/schemastery'` 救急。
 
 ### 方式 B：开发态注入（本仓库日常开发）
 
