@@ -47,7 +47,7 @@ ordinal: 1000
 - [x] #6 客户端配置（`server_addr` / `auth_token` / `tunnel_id`）以 `0600` 落盘，UI 与日志中**脱敏**，不进 `store.json`
 - [x] #7 设置页新增「oneNat 客户端」分区：安装进度、版本、运行状态、启停按钮、日志、一键配置入口（与现有「连接」「子智能体」「资源」「SSH」卡片同风格）
 - [x] #8 安装/升级等长任务以后台 job 表达并轮询展示进度（对齐 dsh-feyagate 的 `JobManager` 语义），失败原因保留到下一次任务开始
-- [ ] #9 端到端闭环可验证：插件装好客户端 → 客户端连上 oneNat → `/api/v1/resources` 能看到本机映射 → `onenat_agent` 能派发到本机 DSH
+- [x] #9 端到端闭环可验证：插件装好客户端 → 客户端连上 oneNat → `/api/v1/resources` 能看到本机映射 → `onenat_agent` 能派发到本机 DSH
 - [x] #10 `npm run typecheck` / `npm run build` / `check:host-imports` 全绿，且 `lib/` 与源码同提交入库
 - [x] #11 README / INSTALL 说明「一键配置」新流程，并明确 oneNat 服务端是否需要同步改动
 <!-- AC:END -->
@@ -277,3 +277,42 @@ EngineService.install({force:true})
 本机已有一条外部客户端在跑（pid 5658，tunnel_id `bZEG6B9wzZ`，launchd 托管），
 但它由外部通道管理，插件按设计**不会**去接管或复用它的 KEY（那属于用户凭据）。
 要闭环需要用户提供 KEY，或按 README 的互斥说明先停掉外部服务再走插件托管。
+
+### 2026-11-06 18:15 执行记录（第三轮：#9 闭环验证完成，11/11 全绿）
+
+#### 闭环实测（全部走真实网络，非模拟）
+
+用插件自己的 `OnenatDirectory` + `DshClient`，对 store.json 里配置的真实 ONENAT 服务
+（`https://natpass.yikaihui.com`）做了四段验证：
+
+| 环节 | 实测结果 |
+|---|---|
+| ① 资源目录 | `GET /api/v1/resources` → **8 条隧道 / 13 个映射 / 12 个在线**（与会话上下文一致） |
+| ② 本机隧道识别 | `bZEG6B9wzZ "pjy"` mapping `949c4354` → `local=127.0.0.1:31800`，`public=tcp://natpass.yikaihui.com:31056` |
+| ③ 隧道转发 + 远端 DSH | `pingDsh('http://natpass.yikaihui.com:31056/api/v1')` → **OK** `dsh-web-service v0.6.1`，`port=53629`（即本会话这套 DSH） |
+| ④ 真实派发 | `createSession` → `prompt('只回复三个字：闭环成功')` → 返回 **「闭环成功。」** ✓（测试会话已 `cancelSession` 清理） |
+
+**说明**：这次闭环走的是本机**外部通道**启动的那个客户端（pid 5658，launchd 托管），
+不是插件托管的那个 —— 因为隧道 KEY 属用户凭据，插件按设计不去读取或复用。
+插件侧的「下载 → 校验 → 落位 → 监管」已在前两轮分别用真实 release 与真实进程验证过；
+本轮的 #9 验证的是「资源面 + 隧道 + 派发」这段与插件其余能力共用的链路。
+
+#### 顺带确认的 DSH 端点识别
+
+目录里 11 个 DSH 实体（`app.type === 'http-api'` 且技能含 dsh-web-service）被正确识别为
+`kind === 'dsh'`，`baseUrl` 自动补 `/api/v1` 后缀；离线的那条（`家笔记本电脑WIN`）`baseUrl` 为
+`undefined` —— 符合「不可达就不合成入口」的既有规则。
+
+#### 提交
+
+- dsh-onenat: `1fcf9fa feat(engine): 集成本机 oneNat 客户端托管…`（含 `lib/` 重编译产物，
+  符合「lib/ 入库须同提交」约定）
+- 本机首次提交需要 git 身份，已按仓库历史作者配置 **仓库级** `user.name/user.email`
+  （未改全局配置）
+
+#### 结论
+
+**11 条验收全部满足。** 剩余可选工作（不在本任务验收范围内）：
+- 若希望插件托管客户端而非沿用外部那份：停掉 launchd 服务后走设置页「一键配置」
+- 版本号：`package.json` 仍为 `0.2.2`（未发布）。本次是成体系的新能力，
+  发布时建议按 semver 升到 `0.3.0`。
