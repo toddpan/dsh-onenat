@@ -316,3 +316,41 @@ EngineService.install({force:true})
 - 若希望插件托管客户端而非沿用外部那份：停掉 launchd 服务后走设置页「一键配置」
 - 版本号：`package.json` 仍为 `0.2.2`（未发布）。本次是成体系的新能力，
   发布时建议按 semver 升到 `0.3.0`。
+
+### 2026-11-06 19:00 执行记录（发版：GitHub Release + npm）
+
+#### 发布结果
+
+| 渠道 | 结果 |
+|---|---|
+| **GitHub Release** | [`v0.3.1`](https://github.com/toddpan/dsh-onenat/releases/tag/v0.3.1) —— 附 `dsh-onenat-0.3.1.tgz`（282 KB / 91 文件） |
+| **npm** | `dsh-onenat@0.3.1` 已发布，`dist-tags.latest = 0.3.1` |
+| **配套（onenat 仓）** | [`r2026.11.06`](https://github.com/toddpan/onenat/releases/tag/r2026.11.06) —— 7 平台客户端 + sha256 |
+
+发布前门禁：`typecheck` 0 error / `build:client` 通过 / `check:host-imports` 16 文件 OK；
+`manifest/client-manifest.json` 已按 `r2026.11.06` 烘焙（7/7 平台均为裸二进制形态）。
+
+#### 顺手修掉的两处发布缺陷
+
+1. **`manifest/` 未随包发布**（前一轮 0.3.0 已修）：`files` 只列了 `lib`/`cordis.patch.yml`/`skills`，
+   烘焙清单会被漏掉 → 离线兜底失效。0.3.0 起 `files` 已含 `manifest`，本次 npm 包内已确认。
+2. **`prepublishOnly` 会触发 `npm run build`**，而 `build.sh` 需要 `DSH_CHECKOUT`（本机无 DSH 源码 checkout）。
+   本次用 `npm publish --ignore-scripts` 发布 —— `lib/` 已构建并入库，符合仓库「lib/ 入库须同提交」约定。
+   若将来在 CI 发版，应保证 checkout 存在或同样跳过构建。
+
+#### profile 依赖改为 npm 源
+
+原先 `plugin_manager install_bundle <本地 tgz>` 会把 profile 依赖写成
+`file:/path/to/dsh-onenat-0.3.1.tgz` —— 一旦清理仓库或换机，`pnpm install` 直接失败。
+现已改为 `dsh-onenat@0.3.1`（npm），并**实测**：
+
+- 卸载 → 从 npm 重装 → `application: applied`
+- **客户端进程存活**（pid 57133 全程未变）→ 验证了 `dispose()` 不杀子进程的设计意图：
+  插件重载/升级不会打断隧道
+- 装完 `running=true` / `tunnelOnline=true`；`foreignClientPid` 为空（无假阳性）
+
+#### 备份说明
+
+卸载外部 launchd 客户端前的配置（tunnel `bZEG6B9wzZ`）未做凭据备份 —— 按「凭证不落盘」原则，
+需要时从 oneNat 后台隧道详情页重新取 KEY。当前插件托管的是 tunnel `7HMGyIsF3D`（公司笔记本），
+3 条映射已建立。
