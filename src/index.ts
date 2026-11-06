@@ -11,7 +11,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from 'cordis'
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-tools'
 
@@ -27,6 +27,7 @@ import { registerPreStep } from './prestep.js'
 import { ManageRouter } from './router.js'
 import { registerTools, renderAgentRoster } from './tools.js'
 import { registerClientBridge } from './bridge.js'
+import { EngineService } from './engine/index.js'
 import type { PluginConfig } from './types.js'
 
 // 与 package.json 的 name 保持一致：插件身份会出现在 DSH 的插件清单与日志里
@@ -41,6 +42,8 @@ export const Config: z<Config> = z.object({
   onenatBaseUrl: z.string().default('').description('ONENAT 服务地址（留空用存储中的设置）'),
   onenatApiKey: z.string().default('').description('ONENAT API Key（onk-…，留空用存储中的设置）'),
   autoRefreshMs: z.number().default(60_000).description('资源目录自动刷新间隔（毫秒）'),
+  engineRepo: z.string().default('toddpan/onenat').description('oneNat 客户端 GitHub Release 仓库（owner/repo）'),
+  engineAutoStart: z.boolean().default(true).description('插件启动时自动拉起已安装的 oneNat 客户端'),
 })
 
 /** Client 侧经包私有 RPC 调用的方法名（设置页 UI 与 @ 菜单共用） */
@@ -95,7 +98,30 @@ export function apply(ctx: Context, config: Config): void {
   const resources = new MentionResourceResolver(sshStore)
   const runner = new AgentRunner(store, resolver, composer, resources)
 
-  const router = new ManageRouter({ store, directory, resolver, runner, parser, sshStore, log })
+  // oneNat 客户端（隧道代理引擎）：从 GitHub Release 下载、sha256 校验、落位、进程监管。
+  //
+  // 健康判定是「两半」：进程存活由引擎自己管；隧道在 oneNat 服务端是否在线，
+  // 只能问服务端（客户端跑在 managed 模式且 inspect_addr: disabled，没有本地健康端点）——
+  // 所以把已有的 OnenatDirectory 目录快照作为另一半喂进去。
+  const engine = new EngineService({
+    log,
+    repo: config.engineRepo || 'toddpan/onenat',
+    isTunnelOnline: (tunnelId) => {
+      if (!tunnelId) return undefined
+      const tunnel = directory.current()?.tunnels.find((t) => t.id === tunnelId)
+      return tunnel ? tunnel.online : undefined
+    },
+  })
+  ctx.effect(
+    () => () => {
+      // DSH 退出 ≠ 客户端停机：dispose 只解除监听，不杀子进程，
+      // 下次启动靠 pid 文件接管（否则用户会莫名丢掉隧道）。
+      engine.dispose()
+    },
+    'dsh-onenat: engine dispose',
+  )
+
+  const router = new ManageRouter({ store, directory, resolver, runner, parser, sshStore, engine, log })
   type WebServerLike = {
     port?: number
     register(route: unknown): () => void
@@ -183,6 +209,17 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   registerPreStep(ctx, { store, parser, composer, resources }, log)
+
+  // 自动拉起客户端：DSH 重启后把隧道带回来（pid 文件里还活着就接管，不起第二个）。
+  // 未安装 / 未注册时静默跳过 —— 这是正常状态，不是错误。
+  if (config.engineAutoStart !== false) {
+    void engine
+      .start()
+      .then((r) => {
+        if (r?.error) log(`客户端未自动启动：${r.error}`)
+      })
+      .catch((err: any) => log(`客户端自动启动失败：${err?.message || err}`))
+  }
 
   log(`Mounted. ONENAT: ${directory.endpoint || '(未配置)'}`)
 }

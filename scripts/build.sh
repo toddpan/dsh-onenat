@@ -57,7 +57,7 @@ mkdir -p node_modules/@deepseek-ai
 node -e "const fs=require('fs');fs.rmSync('node_modules/@standard-schema',{recursive:true,force:true})"
 link_pkg cordis vendor/cordis
 link_pkg cosmokit vendor/cosmokit
-link_pkg schemastery vendor/schemastery
+link_pkg @deepseek-ai/schemastery vendor/schemastery
 link_pkg @deepseek-ai/dsh-tools packages/core/tools
 link_pkg @deepseek-ai/dsh-llm packages/llm/llm
 link_pkg @deepseek-ai/dsh-system-prompt packages/core/system-prompt
@@ -126,6 +126,27 @@ if [ ! -e node_modules/undici ]; then
     echo "=== undici linked from $UNDICI_SRC ==="
   else
     echo "=== undici not found (SSE 长静默段将使用 undici 默认 300s chunk 超时) ==="
+  fi
+fi
+
+# tar（.tar.gz 解包；oneNat 客户端发行包是 tar.gz）。
+# 已声明在 package.json dependencies；构建期优先 profile，其次 checkout，都没有则跳过
+# （引擎侧遇到缺包会给出明确报错，而不是静默失败）。
+if [ ! -e node_modules/tar ]; then
+  TAR_SRC=""
+  for candidate in "${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/tar" "$CHECKOUT/node_modules/tar" "$CHECKOUT"/node_modules/.pnpm/tar@7*/node_modules/tar; do
+    if [ -d "$candidate" ]; then TAR_SRC="$candidate"; break; fi
+  done
+  if [ -n "$TAR_SRC" ]; then
+    node -e "
+      const fs = require('fs');
+      const path = require('path');
+      fs.mkdirSync('node_modules', { recursive: true });
+      fs.symlinkSync(path.resolve(process.argv[1]), path.resolve('node_modules/tar'), process.platform === 'win32' ? 'junction' : 'dir');
+    " "$TAR_SRC"
+    echo "=== tar linked from $TAR_SRC ==="
+  else
+    echo "=== tar not found (引擎解包 .tar.gz 将失败：请先 npm install) ==="
   fi
 fi
 

@@ -269,4 +269,8 @@ export interface PluginConfig {
     onenatBaseUrl?: string;
     onenatApiKey?: string;
     autoRefreshMs?: number;
+    /** oneNat 客户端 GitHub Release 仓库（owner/repo） */
+    engineRepo?: string;
+    /** 插件启动时自动拉起已安装的 oneNat 客户端 */
+    engineAutoStart?: boolean;
 }

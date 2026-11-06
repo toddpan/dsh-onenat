@@ -94,6 +94,44 @@ onenat_agent({
 - 代码块与行内代码里的 `@…` 会被跳过（避免示例文本被当真）；
 - 资源离线 / 实体已删除 → 注入一条**告警**要求模型据实说明，绝不静默忽略。
 
+### ④ oneNat 客户端（隧道代理引擎）
+
+> 以前装 oneNat 客户端要人工 `curl -sSL <服务器>/install.sh | bash -s -- <隧道ID> <KEY>`，
+> 还得手工配 systemd / launchd / 注册表。现在这件事在插件里点几下就完。
+
+**它是什么**：oneNat 的客户端代理，跑在**本机**，连到 oneNat 服务端建立反向隧道，
+把本机服务（DSH Web、SSH、其它 HTTP 服务）经 oneNat 暴露成公网入口。
+**本插件此前只是控制面**（读 oneNat 的 `/api/v1/resources` 拿目录、往远端 DSH 派发任务），
+不落地这个客户端；现在把它也托管进来。
+
+**设置页「oneNat 客户端（隧道代理）」卡片**覆盖三件事：
+
+| 动作域 | 做什么 |
+|---|---|
+| **发行版** | 从 GitHub Release（`toddpan/onenat`）解析当前平台的资产 → 流式下载 → **sha256 校验**（校验不过就删文件拒绝安装）→ 解包/落位 → `chmod 0755` → 原子就位到 `~/.dsh/dsh-onenat/engine/versions/<version>/`，`current` 指针记录当前版本 |
+| **进程** | `<binary> managed --config <client.yml>` 子进程监管：pid 文件、DSH 重启后**接管**旧进程（不会起第二个）、崩溃退避（1s→30s）、启动期退出不算崩溃、看门狗、stdout/stderr 落 `logs/client.log` |
+| **注册** | 填「隧道 ID + KEY」→ 插件调 oneNat 服务端 `GET {baseUrl}/api/deploy?id=&key=` 换托管配置 YAML → 落盘为 `client.yml`（**0600**） |
+
+**健康判定是「两半」**：客户端跑在 `managed` 模式且 `inspect_addr: disabled`，**没有本地健康端点**，
+所以「活着」= 子进程存活（引擎管） + 隧道在 oneNat 服务端已上线（宿主侧用已有的资源目录快照判定）。
+
+**和「一键安装脚本」装的那份不会打架**：如果你的机器上已经用 oneNat 后台的
+`curl … /install.sh | bash` 装过客户端（由 launchd / systemd 托管，配置在 `~/.onenat-client/`），
+插件会发现它并**拒绝再起一个** —— 同一个隧道只能有一个客户端在连。
+界面会直接告诉你 pid 和停掉它的命令；你也可以继续用外部那份，插件其余功能照常。
+
+**密钥边界**：`auth_token`（隧道 KEY）只在提交那一刻发给宿主，落盘为 `0600` 的 `client.yml`；
+**不写进 `store.json`、不进日志、界面上只显示掩码**。DSH 退出**不会**杀掉客户端
+（`dispose` 只解除监听），下次启动靠 pid 文件接管 —— 否则用户会莫名丢掉隧道。
+
+> 发行版发布在 oneNat 仓：`make release-clients`（**必须 `-tags release`**，否则客户端会跳过服务端证书校验）
+> → `python3 packaging/release_client.py --tag <tag>` 产出裸二进制 + 归档 + `checksums.txt`(sha256)
+> → `packaging/publish_release.sh` 发 GitHub Release。
+>
+> 当前最新可用：**`r2026.11.06`**（7 平台裸二进制 + 归档 + sha256 清单）。
+> 插件优先选裸二进制 —— 下载后直接 `chmod +x` 落位，不需要解包。
+> 更早的 `r2026.09.07` 只有归档，且包内可执行文件仍叫 `ngrok`（改名前的产物）。
+
 ---
 
 ## 安装与注入
@@ -106,9 +144,13 @@ onenat_agent({
 dsh plugin --profile web add https://github.com/toddpan/dsh-onenat
 ```
 
+**DSH Desktop 版**：desktop profile 由 Electron 应用独占管理，CLI 会拒绝 `dsh plugin --profile desktop ...`（`error: profile "desktop" is managed exclusively by the Electron application`）。请改从 GUI 安装：**设置 → 插件 → 安装插件**，填仓库地址或 npm 包名 `dsh-onenat`，装完**完全退出并重开 DSH**（Host 侧 Loader 条目在启动时装载，插件管理页的热启用不重建已失败的条目）。
+
 > **先卸注入版再装**：本机若还在经 `dev_inject_plugin` 注入本插件，先用 `dev_uninject_plugin {"match": "dsh-onenat"}` 卸载再走方式 A，否则两条通道会重复注册同名工具与路由。
 
-> **首次安装若报 `ERR_PNPM_IGNORED_BUILDS`**：依赖 `ssh2` 带可选原生加速脚本，pnpm ≥10 默认拦截。按 CLI 提示把 profile 目录 `pnpm-workspace.yaml` 里 `allowBuilds` 下的 `ssh2` / `cpu-features` 设为 `true` 后重跑一次即可（装过 dsh-remote-orchestrator 的 profile 通常已放行）。不放心可设 `false`——本插件的连接测试会退化为纯 TCP 探测，只是认证握手与远程执行不可用。
+> **首次安装若报 `ERR_PNPM_IGNORED_BUILDS`**：依赖 `ssh2` 带可选原生加速脚本，pnpm ≥10 默认拦截。桌面版插件管理会把它归为 `build-blocked` 并给出「允许构建脚本」的确认（写回 profile 的 `pnpm-workspace.yaml`，`allowBuilds` 下 `ssh2` / `cpu-features` 为 `true`），允许后重试即可；CLI 路径则按提示手改该文件后重跑。装过 dsh-remote-orchestrator 的 profile 通常已放行。不放心可设 `false`——本插件的连接测试会退化为纯 TCP 探测，只是认证握手与远程执行不可用。
+
+> **装完设置页里没有「oneNat@」？** 设置页由插件的浏览器半边注册，而浏览器半边只有在 Host 半边激活成功时才会进入启动图。先在**设置 → 插件**看该条目是否报 `failed to import` / `did not activate`：v0.2.1 及更早版本 Host 半边误用裸 `schemastery` 导入，而 dsh 运行时只提供 `@deepseek-ai/schemastery`，于是 `ERR_MODULE_NOT_FOUND` 让整条插件条目不激活（`@` 菜单同样不出现）。0.2.2 已修；旧版可临时把 `~/.dsh/profiles/desktop/node_modules/dsh-onenat/lib/index.js` 里的 `from 'schemastery'` 改成 `from '@deepseek-ai/schemastery'` 救急。
 
 ### 方式 B：开发态注入（本仓库日常开发）
 
@@ -136,6 +178,8 @@ dev_uninject_plugin {"match": "dsh-onenat"}        # 卸载即净
 | `onenatBaseUrl` | 空 → 存储设置（默认 `https://onenat.sooncore.com`） | ONENAT 服务地址 |
 | `onenatApiKey` | 空 → 存储设置 | ONENAT API Key（`onk-…`，只读） |
 | `autoRefreshMs` | `60000` | 资源目录自动刷新间隔 |
+| `engineRepo` | `toddpan/onenat` | oneNat 客户端 GitHub Release 仓库（`owner/repo`） |
+| `engineAutoStart` | `true` | 插件启动时自动拉起已安装的 oneNat 客户端 |
 
 ## 管理 API（前缀 `<pathPrefix>`）
 
@@ -150,6 +194,14 @@ GET  /api/candidates?q=                  @ 菜单候选（子智能体 + 资源 
 POST /api/debug/parse                   提及解析自检
 GET|POST /api/ssh               DELETE /api/ssh/:id
 POST /api/ssh/:id/test|exec
+
+GET  /api/engine/status                 oneNat 客户端状态（安装/运行/版本/隧道在线/外部客户端冲突）
+GET  /api/engine/logs?limit=            客户端日志尾部
+GET  /api/engine/job                    当前安装作业快照
+POST /api/engine/install                安装/升级（后台作业，busy 时 409）
+POST /api/engine/start|stop|restart     客户端进程启停
+POST /api/engine/configure              隧道 ID + KEY → 拉取托管配置并落盘（0600）
+POST /api/engine/job/cancel             取消当前安装作业
 ```
 
 ## 模型工具
@@ -190,7 +242,18 @@ src/
   tools.ts            4 个模型工具 + 花名册渲染
   router.ts           管理 API（设置页用）
   bridge.ts           浏览器半边桥（当前为能力自检；数据走管理 API）
-  client/index.ts     @ 输入触发源 + codec + 设置页管理 UI
+  engine/             oneNat 客户端（隧道代理引擎）托管：paths / platform / manifest /
+                      download / verify / extract / install / config / supervise / jobs
+  client/index.ts     @ 输入触发源 + codec + 设置页管理 UI（含「oneNat 客户端」卡片）
+scripts/
+  build.sh            Host 编译（链接 dsh checkout 依赖；宿主包按 @deepseek-ai/* 作用域名链接）
+  gen-client-manifest.mjs
+                      烘焙 manifest/client-manifest.json（GitHub Release 资产 + sha256，离线兜底）
+  check-host-imports.mjs
+                      Host 半边裸导入校验：只允许 node:/相对路径、package.json dependencies、
+                      或 dsh 运行时自带的 @deepseek-ai/* 包（防止再出现裸 `schemastery` 这类装不上就静默不激活的导入）
 ```
+
+Host 半边**只能**用两种方式引用外部包：写进 `dependencies`（pnpm 装进 profile），或用运行时自带包的**发布作用域名**（如 `@deepseek-ai/schemastery`、`@deepseek-ai/dsh-tools`）。开发态注入走 dsh checkout 的软链，裸名能解析、发布到 profile 就解析不了——`npm run check:host-imports` 已把这条规则固化成构建门禁。
 
 BSD-3-Clause

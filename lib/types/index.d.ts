@@ -9,7 +9,7 @@
  * 本插件不提供第二套聊天界面：对话、工具卡、思维链、统计全部复用 DSH 原生能力。
  */
 import type { Context } from 'cordis';
-import z from 'schemastery';
+import z from '@deepseek-ai/schemastery';
 import type { PluginConfig } from './types.js';
 export declare const name = "dsh-onenat";
 export declare const inject: string[];

@@ -12,6 +12,7 @@ import type { MentionParser } from './mentions.js'
 import type { AgentRunner } from './agent-runner.js'
 import type { SshResourceStore } from './ssh-store.js'
 import type { WorkStore } from './store.js'
+import type { EngineService } from './engine/index.js'
 import { DshClient } from './remote-client.js'
 import {
   SshInputError,
@@ -42,6 +43,7 @@ export interface RouterDeps {
   runner: AgentRunner
   parser: MentionParser
   sshStore: SshResourceStore
+  engine: EngineService
   log: (msg: string) => void
 }
 
@@ -113,6 +115,30 @@ export class ManageRouter {
     const target = await this.deps.resolver.resolve(probe)
     if (!target.online || !target.baseUrl) throw new InputError(target.error || '远端 DSH 节点不可达', 502)
     return target
+  }
+
+  /**
+   * 同源检查：浏览器发起的写请求带 Origin，其 host 必须与 Host 一致。
+   * 不带 Origin（curl / 脚本 / 非浏览器客户端）一律放行 —— 本地管理面不对外服务。
+   * 只用在引擎写接口上：那些接口能落盘客户端凭据，跨源页面不该能触发。
+   */
+  private sameOrigin(req: IncomingMessage): boolean {
+    const origin = req.headers.origin
+    if (!origin || typeof origin !== 'string') return true
+    const host = req.headers.host
+    if (!host) return true
+    try {
+      return new URL(origin).host === host
+    } catch {
+      return false
+    }
+  }
+
+  /** 引擎作业是否仍在跑（安装是全局单任务槽，并发提交要挡在服务端） */
+  private engineBusy(engine: EngineService): boolean {
+    const job = engine.currentJob()
+    if (!job) return false
+    return job.phase !== 'done' && job.phase !== 'failed' && job.phase !== 'cancelled'
   }
 
   /** @returns 是否已处理 */
@@ -321,6 +347,70 @@ export class ManageRouter {
           return true
         }
       }
+
+      // ---- oneNat 客户端（隧道代理引擎） ----
+      //
+      // 这一组接口管的是「本机跑的 oneNat 客户端」：从 GitHub Release 下载、
+      // sha256 校验、落位、进程监管，以及用隧道 ID + KEY 换服务端托管配置。
+      // 客户端配置里含 auth_token（密钥），所以写操作额外做同源检查。
+
+      if (path.startsWith('/api/engine/')) {
+        if (method !== 'GET' && method !== 'HEAD' && !this.sameOrigin(req)) {
+          this.sendJson(res, 403, { ok: false, error: '跨源请求被拒绝' })
+          return true
+        }
+        const engine = this.deps.engine
+        if (path === '/api/engine/status' && method === 'GET') {
+          this.sendJson(res, 200, { ok: true, data: await engine.status() })
+          return true
+        }
+        if (path === '/api/engine/logs' && method === 'GET') {
+          const raw = Number(url.searchParams.get('limit') || 200)
+          const limit = Number.isFinite(raw) && raw > 0 ? Math.min(raw, 1000) : 200
+          this.sendJson(res, 200, { ok: true, data: await engine.logs({ limit }) })
+          return true
+        }
+        if (path === '/api/engine/job' && method === 'GET') {
+          this.sendJson(res, 200, { ok: true, data: { job: engine.currentJob() } })
+          return true
+        }
+        if (path === '/api/engine/install' && method === 'POST') {
+          if (this.engineBusy(engine)) {
+            this.sendJson(res, 409, { ok: false, error: '已有引擎任务在运行，请等待完成或先取消' })
+            return true
+          }
+          const body = await this.parseBody(req)
+          const version = typeof body?.version === 'string' && body.version.trim() ? body.version.trim() : undefined
+          this.sendJson(res, 200, { ok: true, data: engine.install({ version, force: body?.force === true }) })
+          return true
+        }
+        if (path === '/api/engine/start' && method === 'POST') {
+          this.sendJson(res, 200, { ok: true, data: await engine.start() })
+          return true
+        }
+        if (path === '/api/engine/stop' && method === 'POST') {
+          this.sendJson(res, 200, { ok: true, data: await engine.stop() })
+          return true
+        }
+        if (path === '/api/engine/restart' && method === 'POST') {
+          this.sendJson(res, 200, { ok: true, data: await engine.restart() })
+          return true
+        }
+        if (path === '/api/engine/configure' && method === 'POST') {
+          const body = await this.parseBody(req)
+          const result = await engine.configure({
+            baseUrl: String(body?.baseUrl || ''),
+            tunnelId: String(body?.tunnelId || ''),
+            key: String(body?.key || ''),
+          })
+          this.sendJson(res, result.ok ? 200 : 400, result.ok ? { ok: true, data: result } : { ok: false, error: result.error || '配置失败' })
+          return true
+        }
+        if (path === '/api/engine/job/cancel' && method === 'POST') {
+          this.sendJson(res, 200, { ok: true, data: { cancelled: engine.cancelJob() } })
+          return true
+        }
+      }
     } catch (err: any) {
       if (err instanceof InputError) {
         this.sendJson(res, err.statusCode, { ok: false, error: err.message })
@@ -333,7 +423,6 @@ export class ManageRouter {
       this.sendJson(res, 500, { ok: false, error: String(err?.message || err) })
       return true
     }
-
     return false
   }
 }

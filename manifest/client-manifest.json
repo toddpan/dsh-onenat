@@ -1,0 +1,100 @@
+{
+  "repo": "toddpan/onenat",
+  "tag": "r2026.11.06",
+  "generatedAt": "2026-11-06T09:57:26.408Z",
+  "platforms": {
+    "darwin-arm64": {
+      "file": "onenat-client_darwin_arm64",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_darwin_arm64",
+      "sha256": "40d7e6f14744e2322685b7c38400f0a5908cb582444c0603dc82c0f2e92298a8",
+      "kind": "binary"
+    },
+    "darwin-amd64": {
+      "file": "onenat-client_darwin_amd64",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_darwin_amd64",
+      "sha256": "540d7ee9afb53e2c753bbbc3a23cf354cf9a2a5ca3a4c299336ddd8be52b9ec5",
+      "kind": "binary"
+    },
+    "linux-arm64": {
+      "file": "onenat-client_linux_arm64",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_linux_arm64",
+      "sha256": "93a5fe9395ce45e262bc5cf397c12e76cd4ec3d3c8dce4440968124f583b12c7",
+      "kind": "binary"
+    },
+    "linux-amd64": {
+      "file": "onenat-client_linux_amd64",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_linux_amd64",
+      "sha256": "9c660c6394a9bf6ace8eb5a16ce49680c66f079711534e02f13bffd95620e404",
+      "kind": "binary"
+    },
+    "linux-arm": {
+      "file": "onenat-client_linux_arm",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_linux_arm",
+      "sha256": "212b2b129a38e45dc710364b966e9c68d2ff7afcf32ff8c293b577694aca0727",
+      "kind": "binary"
+    },
+    "windows-arm64": {
+      "file": "onenat-client_windows_arm64.exe",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_windows_arm64.exe",
+      "sha256": "3c448cdca1792be00aa174f390142dbbd56db2506a3cef2d464d9e7b30527f5f",
+      "kind": "binary"
+    },
+    "windows-amd64": {
+      "file": "onenat-client_windows_amd64.exe",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_windows_amd64.exe",
+      "sha256": "1bdfad4b6c25e1aed710443e9c3b28d67f0414a8bf85cbc469c2452a3afd379f",
+      "kind": "binary"
+    }
+  },
+  "assets": [
+    {
+      "file": "onenat-client_darwin_arm64",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_darwin_arm64",
+      "sha256": "40d7e6f14744e2322685b7c38400f0a5908cb582444c0603dc82c0f2e92298a8",
+      "kind": "binary",
+      "platform": "darwin-arm64"
+    },
+    {
+      "file": "onenat-client_darwin_amd64",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_darwin_amd64",
+      "sha256": "540d7ee9afb53e2c753bbbc3a23cf354cf9a2a5ca3a4c299336ddd8be52b9ec5",
+      "kind": "binary",
+      "platform": "darwin-amd64"
+    },
+    {
+      "file": "onenat-client_linux_arm64",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_linux_arm64",
+      "sha256": "93a5fe9395ce45e262bc5cf397c12e76cd4ec3d3c8dce4440968124f583b12c7",
+      "kind": "binary",
+      "platform": "linux-arm64"
+    },
+    {
+      "file": "onenat-client_linux_amd64",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_linux_amd64",
+      "sha256": "9c660c6394a9bf6ace8eb5a16ce49680c66f079711534e02f13bffd95620e404",
+      "kind": "binary",
+      "platform": "linux-amd64"
+    },
+    {
+      "file": "onenat-client_linux_arm",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_linux_arm",
+      "sha256": "212b2b129a38e45dc710364b966e9c68d2ff7afcf32ff8c293b577694aca0727",
+      "kind": "binary",
+      "platform": "linux-arm"
+    },
+    {
+      "file": "onenat-client_windows_arm64.exe",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_windows_arm64.exe",
+      "sha256": "3c448cdca1792be00aa174f390142dbbd56db2506a3cef2d464d9e7b30527f5f",
+      "kind": "binary",
+      "platform": "windows-arm64"
+    },
+    {
+      "file": "onenat-client_windows_amd64.exe",
+      "url": "https://github.com/toddpan/onenat/releases/download/r2026.11.06/onenat-client_windows_amd64.exe",
+      "sha256": "1bdfad4b6c25e1aed710443e9c3b28d67f0414a8bf85cbc469c2452a3afd379f",
+      "kind": "binary",
+      "platform": "windows-amd64"
+    }
+  ]
+}

@@ -367,6 +367,19 @@ const CSS = `
 .onm-linkbtn { font:inherit; font-size:11.5px; background:none; border:none; padding:0; cursor:pointer;
   color: var(--dsw-alias-state-business-primary, #4176e6); }
 .onm-linkbtn:hover { text-decoration:underline; }
+/* 引擎安装进度条：percent 未知时走不定态动画（和 dsh-feyagate 的作业进度语义一致） */
+.onm-progress { height:6px; border-radius:999px; overflow:hidden;
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.18)); }
+.onm-progress > i { display:block; height:100%; background: var(--dsw-alias-state-business-primary, #4176e6);
+  transition: width .2s ease; }
+.onm-progress.indeterminate > i { width:35%; animation: onm-slide 1.1s ease-in-out infinite; }
+@keyframes onm-slide { 0% { margin-left:-35% } 100% { margin-left:100% } }
+@media (prefers-reduced-motion: reduce) { .onm-progress.indeterminate > i { animation:none; width:100%; opacity:.5; } }
+/* 引擎日志：等宽字体 + 预换行，避免长行把卡片撑破 */
+.onm-logbox { max-height:220px; overflow:auto; padding:8px 10px; border-radius:8px;
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.08));
+  font-family: var(--dsw-alias-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size:11.5px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
 @media (max-width:560px) {
   .onm-overlay { padding:0; align-items:stretch; }
   .onm-modal { max-width:none; max-height:none; height:100%; border-radius:0; border:none; }
@@ -1446,6 +1459,249 @@ function ConnectionCard(props: { settings: any; onSaved: () => void }) {
   )
 }
 
+// ------------------------------------------------------- oneNat 客户端（引擎）
+
+/** 引擎作业 phase → 中文（与 Host 侧 src/engine/jobs.ts 的 phase 一一对应） */
+const ENGINE_PHASE_WORD: Record<string, string> = {
+  queued: '排队中',
+  resolving: '解析发行版',
+  downloading: '下载中',
+  verifying: '校验中',
+  extracting: '解包中',
+  installing: '安装中',
+  starting: '启动中',
+  confirming: '确认中',
+  done: '完成',
+  failed: '失败',
+  cancelled: '已取消',
+}
+
+/**
+ * oneNat 客户端（隧道代理引擎）卡片。
+ *
+ * 定位：把「装客户端」从人工 `curl | bash` 搬进插件设置页。三个动作域：
+ *   ① 发行版 —— 装/升级（从 GitHub Release 下载，sha256 校验）；
+ *   ② 进程 —— 启停（插件内子进程监管；DSH 重启后靠 pid 文件接管，不会起第二个）；
+ *   ③ 注册 —— 隧道 ID + KEY 换服务端托管配置。
+ *
+ * 密钥边界：KEY 只在提交那一刻发给 Host，Host 落盘为 0600 的 client.yml，
+ * 之后界面只显示掩码 —— 这里永远不缓存明文。
+ */
+function EngineCard(props: { baseUrl?: string; onChanged?: () => void }) {
+  const [status, setStatus] = React.useState<any>({})
+  const [job, setJob] = React.useState<any>(null)
+  const [logLines, setLogLines] = React.useState<string[]>([])
+  const [showLogs, setShowLogs] = React.useState(false)
+  const [message, setMessage] = React.useState<Message | undefined>(undefined)
+  const [busy, setBusy] = React.useState(false)
+  const [tunnelId, setTunnelId] = React.useState('')
+  const [key, setKey] = React.useState('')
+  const [showKey, setShowKey] = React.useState(false)
+  const [server, setServer] = React.useState(String(props.baseUrl || ''))
+  useAutoDismiss(message, () => setMessage(undefined))
+
+  React.useEffect(() => {
+    setServer(String(props.baseUrl || ''))
+  }, [props.baseUrl])
+
+  const reload = React.useCallback((): void => {
+    api('/api/engine/status')
+      .then((data: any) => setStatus(data || {}))
+      .catch(() => {})
+  }, [])
+
+  const reloadJob = React.useCallback((): void => {
+    api('/api/engine/job')
+      .then((data: any) => setJob(data?.job || null))
+      .catch(() => {})
+  }, [])
+
+  // 状态轮询：2.5s 一次（与 dsh-feyagate 设置页的轮询节奏一致；页面隐藏时不烧 CPU）
+  React.useEffect(() => {
+    reload()
+    reloadJob()
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      reload()
+    }, 2500)
+    const jobTimer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      reloadJob()
+    }, 900)
+    return () => {
+      clearInterval(timer)
+      clearInterval(jobTimer)
+    }
+  }, [reload, reloadJob])
+
+  const reloadLogs = React.useCallback((): void => {
+    api('/api/engine/logs?limit=200')
+      .then((data: any) => setLogLines(Array.isArray(data?.lines) ? data.lines : []))
+      .catch((err: any) => setMessage({ kind: 'err', text: String(err?.message || err) }))
+  }, [])
+
+  const run = (fn: () => Promise<any>, okText?: string): void => {
+    setBusy(true)
+    fn()
+      .then(() => {
+        if (okText) setMessage({ kind: 'ok', text: okText })
+        reload()
+        reloadJob()
+        props.onChanged?.()
+      })
+      .catch((err: any) => setMessage({ kind: 'err', text: String(err?.message || err) }))
+      .finally(() => setBusy(false))
+  }
+
+  const install = (): void => run(() => api('/api/engine/install', { method: 'POST', body: {} }), '安装任务已启动。')
+  const start = (): void => run(() => api('/api/engine/start', { method: 'POST' }))
+  const stop = (): void => run(() => api('/api/engine/stop', { method: 'POST' }))
+  const restart = (): void => run(() => api('/api/engine/restart', { method: 'POST' }))
+  const cancelJob = (): void => run(() => api('/api/engine/job/cancel', { method: 'POST' }))
+
+  const applyConfig = (): void => {
+    if (!String(tunnelId || '').trim() || !String(key || '').trim()) {
+      setMessage({ kind: 'err', text: '请填写隧道 ID 与 KEY' })
+      return
+    }
+    setBusy(true)
+    api('/api/engine/configure', { method: 'POST', body: { baseUrl: server, tunnelId, key } })
+      .then((data: any) => {
+        setMessage({ kind: 'ok', text: `客户端配置已写入并落盘为 0600：${data?.masked || '已脱敏'}` })
+        setKey('')
+        reload()
+      })
+      .catch((err: any) => setMessage({ kind: 'err', text: String(err?.message || err) }))
+      .finally(() => setBusy(false))
+  }
+
+  const installed = Boolean(status?.installed)
+  const running = Boolean(status?.running)
+  const configured = Boolean(status?.configured)
+  const jobActive = Boolean(job && job.phase !== 'done' && job.phase !== 'failed' && job.phase !== 'cancelled')
+  const percent = typeof job?.percent === 'number' ? job.percent : null
+
+  const progress = jobActive
+    ? React.createElement(
+        'div',
+        { style: { marginTop: 10 } },
+        React.createElement(
+          'div',
+          { className: 'onm-muted', style: { fontSize: 12, marginBottom: 4 } },
+          `${ENGINE_PHASE_WORD[String(job?.phase || '')] || String(job?.phase || '')}${job?.message ? ' · ' + job.message : ''}`
+          + (job?.bytesTotal ? ` · ${Math.round((job.bytesDone || 0) / 1024 / 1024)}/${Math.round(job.bytesTotal / 1024 / 1024)} MB` : ''),
+        ),
+        React.createElement(
+          'div',
+          { className: 'onm-progress' + (percent === null ? ' indeterminate' : '') },
+          React.createElement('i', { style: percent === null ? undefined : { width: `${Math.max(0, Math.min(100, percent))}%` } }),
+        ),
+      )
+    : null
+
+  return React.createElement(
+    'div',
+    { className: 'onm-card' },
+    React.createElement(
+      'div',
+      { className: 'onm-card-head' },
+      React.createElement('h3', { className: 'onm-card-title' }, 'oneNat 客户端（隧道代理）'),
+      React.createElement('div', { className: 'onm-spacer' }),
+      React.createElement(Tag, { tone: installed ? 'ok' : 'off' }, installed ? '已安装' : '未安装'),
+      React.createElement(Tag, { tone: running ? 'ok' : 'off' }, running ? '运行中' : '已停止'),
+      configured ? React.createElement(Tag, { tone: 'brand' }, '已注册') : null,
+    ),
+    React.createElement(
+      'div',
+      { className: 'onm-muted' },
+      '客户端跑在本机，建立反向隧道，把本机服务经 ONENAT 暴露成公网入口。插件负责下载、校验、落位与进程监管；注册只需隧道 ID 与 KEY。',
+    ),
+    status?.version
+      ? React.createElement(
+          'dl',
+          { className: 'onm-meta', style: { marginTop: 8 } },
+          React.createElement(MetaRow, { label: '版本', children: React.createElement('span', { className: 'onm-mono' }, status.version) }),
+          React.createElement(MetaRow, { label: '资产', children: React.createElement('span', { className: 'onm-mono' }, status.assetFile || '—') }),
+          status.tunnelId ? React.createElement(MetaRow, { label: '隧道', children: React.createElement('span', { className: 'onm-mono' }, status.tunnelId) }) : null,
+          status.tunnelOnline !== undefined
+            ? React.createElement(MetaRow, { label: '隧道状态', children: React.createElement(Tag, { tone: status.tunnelOnline ? 'ok' : 'off' }, status.tunnelOnline ? '服务端已上线' : '服务端未见') })
+            : null,
+        )
+      : null,
+    status?.foreignClientPid && !running
+      ? React.createElement(
+          'div',
+          { style: { marginTop: 8 } },
+          React.createElement(Banner, {
+            kind: 'err',
+            text: `本机已有一个不是由本插件管理的 oneNat 客户端在运行（pid ${status.foreignClientPid}）。`
+              + '同一条隧道只能有一个客户端在连，所以插件不会重复启动。'
+              + '要改用插件托管：先停掉它托管的系统服务（macOS `launchctl unload ~/Library/LaunchAgents/com.onenat.client.plist`，Linux `sudo systemctl disable --now onenat-client`）；'
+              + '要继续用外部那个也完全可以，插件其余功能照常可用。',
+          }),
+        )
+      : null,
+    status?.lastError ? React.createElement('div', { style: { marginTop: 8 } }, React.createElement(Banner, { kind: 'err', text: status.lastError })) : null,
+    progress,
+    job && !jobActive && job.error
+      ? React.createElement('div', { style: { marginTop: 8 } }, React.createElement(Banner, { kind: 'err', text: job.error }))
+      : null,
+    React.createElement(
+      'div',
+      { className: 'onm-row', style: { marginTop: 10, flexWrap: 'wrap' } },
+      React.createElement(Btn, { variant: 'primary', onClick: install, disabled: busy || jobActive }, installed ? '重新安装 / 升级' : '安装客户端'),
+      React.createElement(Btn, { onClick: start, disabled: busy || jobActive || !installed }, '启动'),
+      React.createElement(Btn, { onClick: stop, disabled: busy || jobActive || !running }, '停止'),
+      React.createElement(Btn, { onClick: restart, disabled: busy || jobActive || !installed }, '重启'),
+      jobActive ? React.createElement(Btn, { variant: 'ghost', onClick: cancelJob, disabled: busy }, '取消任务') : null,
+      React.createElement(
+        Btn,
+        {
+          variant: 'ghost',
+          onClick: () => {
+            const next = !showLogs
+            setShowLogs(next)
+            if (next) reloadLogs()
+          },
+        },
+        showLogs ? '收起日志' : '查看日志',
+      ),
+    ),
+    showLogs
+      ? React.createElement(
+          'div',
+          { style: { marginTop: 8 } },
+          logLines.length === 0
+            ? React.createElement('div', { className: 'onm-empty' }, '暂无日志。')
+            : React.createElement('div', { className: 'onm-logbox' }, logLines.join('\n')),
+        )
+      : null,
+    React.createElement('div', { className: 'onm-divider' }),
+    React.createElement(
+      'div',
+      { className: 'onm-grid' },
+      React.createElement(Field, { label: 'ONENAT 服务地址', hint: '留空则用「ONENAT 连接与派发默认值」里的地址', children: React.createElement(TextInput, { value: server, mono: true, onChange: setServer, placeholder: 'https://onenat.sooncore.com' }) }),
+      React.createElement(Field, { label: '隧道 ID', hint: 'oneNat 后台 → 隧道详情页', children: React.createElement(TextInput, { value: tunnelId, mono: true, onChange: setTunnelId, placeholder: 'Xw2dophvFo' }) }),
+      React.createElement(Field, {
+        label: '隧道 KEY',
+        hint: '只写入本机 0600 权限的客户端配置文件，不回显、不入库',
+        children: React.createElement(
+          'div',
+          { className: 'onm-row', style: { flexWrap: 'nowrap' } },
+          React.createElement('div', { style: { flex: '1 1 auto', minWidth: 0 } }, React.createElement(TextInput, { value: key, mono: true, type: showKey ? 'text' : 'password', onChange: setKey, placeholder: 'ngk-…' })),
+          React.createElement(Btn, { size: 'sm', variant: 'ghost', onClick: () => setShowKey(!showKey), title: showKey ? '隐藏' : '显示' }, showKey ? '隐藏' : '显示'),
+        ),
+      }),
+    ),
+    React.createElement(
+      'div',
+      { className: 'onm-row', style: { marginTop: 10 } },
+      React.createElement(Btn, { onClick: applyConfig, disabled: busy || jobActive }, '拉取配置并注册'),
+    ),
+    message ? React.createElement(Banner, { kind: message.kind, text: message.text }) : null,
+  )
+}
+
 // --------------------------------------------------------------- 资源目录
 
 function ResourceCard() {
@@ -1879,6 +2135,7 @@ function Section(props: { onMentionChanged?: () => void }) {
     ),
     agents.error ? React.createElement(Banner, { kind: 'err', text: agents.error }) : null,
     React.createElement(ConnectionCard, { settings: settings.value, onSaved: refreshAll }),
+    React.createElement(EngineCard, { baseUrl: settings.value?.onenat?.baseUrl, onChanged: refreshAll }),
     React.createElement(ResourceCard, null),
     React.createElement(SshCard, { onChanged: refreshAll }),
     React.createElement(AgentCard, { agents: agentList, endpoints, onChanged: refreshAll, health, onCheck: check }),

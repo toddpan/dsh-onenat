@@ -1,6 +1,6 @@
 {
   "name": "dsh-onenat",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "OneNat WorkBuddy @ —— 在 DSH 原生输入框用 @ 指定 ONENAT 子智能体与资源（子智能体管理 / 子智能调用 / 资源提示词注入）",
   "repository": {
     "type": "git",
@@ -31,7 +31,7 @@
     "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
     "@deepseek-ai/dsh-host-webserver": ">=0.0.1-rc <2",
     "cordis": ">=4.0.0-rc <5",
-    "schemastery": "^3.18.0",
+    "@deepseek-ai/schemastery": ">=3.18.0 <4",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.0.1-rc <2"
   },
   "devDependencies": {
@@ -40,10 +40,13 @@
     "tsdown": "^0.22.14"
   },
   "scripts": {
-    "build": "bash scripts/build.sh && npm run build:client",
+    "build": "bash scripts/build.sh && npm run build:client && npm run check:host-imports",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build:client": "tsdown",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "check:host-imports": "node scripts/check-host-imports.mjs",
+    "link:deps": "node scripts/link-published-deps.mjs",
+    "gen:client-manifest": "node scripts/gen-client-manifest.mjs"
   },
   "exports": {
     ".": {
@@ -73,6 +76,7 @@
   },
   "dependencies": {
     "ssh2": "^1.17.0",
+    "tar": "^7.4.3",
     "undici": "^7.0.0"
   }
 }
