@@ -385,15 +385,18 @@ export class ManageRouter {
           return true
         }
         if (path === '/api/engine/start' && method === 'POST') {
-          this.sendJson(res, 200, { ok: true, data: await engine.start() })
+          const result = await engine.start()
+          this.sendJson(res, result.started ? 200 : 400, result.started ? { ok: true, data: result } : { ok: false, error: result.error || '启动失败' })
           return true
         }
         if (path === '/api/engine/stop' && method === 'POST') {
-          this.sendJson(res, 200, { ok: true, data: await engine.stop() })
+          const result = await engine.stop()
+          this.sendJson(res, result.stopped ? 200 : 400, result.stopped ? { ok: true, data: result } : { ok: false, error: result.error || '停止失败' })
           return true
         }
         if (path === '/api/engine/restart' && method === 'POST') {
-          this.sendJson(res, 200, { ok: true, data: await engine.restart() })
+          const result = await engine.restart()
+          this.sendJson(res, result.restarted ? 200 : 400, result.restarted ? { ok: true, data: result } : { ok: false, error: result.error || '重启失败' })
           return true
         }
         if (path === '/api/engine/configure' && method === 'POST') {

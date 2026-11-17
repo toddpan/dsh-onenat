@@ -1494,6 +1494,8 @@ function EngineCard(props: { baseUrl?: string; onChanged?: () => void }) {
   const [showLogs, setShowLogs] = React.useState(false)
   const [message, setMessage] = React.useState<Message | undefined>(undefined)
   const [busy, setBusy] = React.useState(false)
+  const [pollError, setPollError] = React.useState('')
+  const [now, setNow] = React.useState(Date.now())
   const [tunnelId, setTunnelId] = React.useState('')
   const [key, setKey] = React.useState('')
   const [showKey, setShowKey] = React.useState(false)
@@ -1512,8 +1514,12 @@ function EngineCard(props: { baseUrl?: string; onChanged?: () => void }) {
 
   const reloadJob = React.useCallback((): void => {
     api('/api/engine/job')
-      .then((data: any) => setJob(data?.job || null))
-      .catch(() => {})
+      .then((data: any) => {
+        setJob(data?.job || null)
+        setPollError('')
+        setNow(Date.now())
+      })
+      .catch(() => setPollError('暂时无法获取安装进度，正在重试。请勿重复安装；下载可能仍在后台继续。'))
   }, [])
 
   // 状态轮询：2.5s 一次（与 dsh-feyagate 设置页的轮询节奏一致；页面隐藏时不烧 CPU）
@@ -1553,7 +1559,11 @@ function EngineCard(props: { baseUrl?: string; onChanged?: () => void }) {
       .finally(() => setBusy(false))
   }
 
-  const install = (): void => run(() => api('/api/engine/install', { method: 'POST', body: {} }), '安装任务已启动。')
+  const install = (): void => run(async () => {
+    const snapshot = await api('/api/engine/install', { method: 'POST', body: {} })
+    setJob(snapshot)
+    setNow(Date.now())
+  }, '正在后台下载安装客户端，进度会持续更新。首次下载可能需要几分钟。')
   const start = (): void => run(() => api('/api/engine/start', { method: 'POST' }))
   const stop = (): void => run(() => api('/api/engine/stop', { method: 'POST' }))
   const restart = (): void => run(() => api('/api/engine/restart', { method: 'POST' }))
@@ -1580,6 +1590,13 @@ function EngineCard(props: { baseUrl?: string; onChanged?: () => void }) {
   const configured = Boolean(status?.configured)
   const jobActive = Boolean(job && job.phase !== 'done' && job.phase !== 'failed' && job.phase !== 'cancelled')
   const percent = typeof job?.percent === 'number' ? job.percent : null
+  const elapsed = job?.startedAt ? Math.max(0, Math.floor(((job.finishedAt || now) - job.startedAt) / 1000)) : 0
+  const size = (bytes: number): string => `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  const downloadInfo = job?.phase === 'downloading'
+    ? (typeof job.bytesDone === 'number'
+      ? `已下载 ${size(job.bytesDone)}${job.bytesTotal ? ' / ' + size(job.bytesTotal) : '（总大小未知）'}${percent !== null ? ` · ${percent}%` : ''}`
+      : '正在连接下载源，等待数据…')
+    : ''
 
   const progress = jobActive
     ? React.createElement(
@@ -1589,7 +1606,13 @@ function EngineCard(props: { baseUrl?: string; onChanged?: () => void }) {
           'div',
           { className: 'onm-muted', style: { fontSize: 12, marginBottom: 4 } },
           `${ENGINE_PHASE_WORD[String(job?.phase || '')] || String(job?.phase || '')}${job?.message ? ' · ' + job.message : ''}`
-          + (job?.bytesTotal ? ` · ${Math.round((job.bytesDone || 0) / 1024 / 1024)}/${Math.round(job.bytesTotal / 1024 / 1024)} MB` : ''),
+          + ` · 已用时 ${elapsed} 秒`,
+        ),
+        React.createElement('div', { className: 'onm-muted', role: 'status', 'aria-live': 'polite', style: { fontSize: 12, marginBottom: 6 } },
+          downloadInfo || '任务进行中，完成后会自动更新状态。',
+        ),
+        React.createElement('div', { className: 'onm-muted', style: { fontSize: 12, marginBottom: 6 } },
+          '解析发行版 → 下载 → 校验 → 安装 → 启动（已配置时）。可以离开设置页，任务会在后台继续。',
         ),
         React.createElement(
           'div',
@@ -1643,13 +1666,15 @@ function EngineCard(props: { baseUrl?: string; onChanged?: () => void }) {
       : null,
     status?.lastError ? React.createElement('div', { style: { marginTop: 8 } }, React.createElement(Banner, { kind: 'err', text: status.lastError })) : null,
     progress,
+    pollError ? React.createElement(Banner, { kind: 'err', text: pollError }) : null,
+    job?.phase === 'done' ? React.createElement('div', { style: { marginTop: 8 } }, React.createElement(Banner, { kind: 'ok', text: job.message || '客户端安装完成。' })) : null,
     job && !jobActive && job.error
       ? React.createElement('div', { style: { marginTop: 8 } }, React.createElement(Banner, { kind: 'err', text: job.error }))
       : null,
     React.createElement(
       'div',
       { className: 'onm-row', style: { marginTop: 10, flexWrap: 'wrap' } },
-      React.createElement(Btn, { variant: 'primary', onClick: install, disabled: busy || jobActive }, installed ? '重新安装 / 升级' : '安装客户端'),
+      React.createElement(Btn, { variant: 'primary', onClick: install, disabled: busy || jobActive }, jobActive ? `${ENGINE_PHASE_WORD[String(job?.phase)] || '处理中'}…` : installed ? '检查更新 / 安装' : '安装客户端'),
       React.createElement(Btn, { onClick: start, disabled: busy || jobActive || !installed }, '启动'),
       React.createElement(Btn, { onClick: stop, disabled: busy || jobActive || !running }, '停止'),
       React.createElement(Btn, { onClick: restart, disabled: busy || jobActive || !installed }, '重启'),

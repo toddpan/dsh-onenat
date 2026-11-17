@@ -119,6 +119,12 @@ export class JobManager {
     const context: JobContext = {
       signal: controller.signal,
       phase: (phase, message = null, patch = {}) => {
+        if (snapshot.phase !== phase) {
+          snapshot.percent = null
+          delete snapshot.bytesDone
+          delete snapshot.bytesTotal
+          delete snapshot.message
+        }
         snapshot.phase = phase
         if (message !== null) snapshot.message = message
         Object.assign(snapshot, patch)
